@@ -1,0 +1,21 @@
+name: http-example
+description: >
+  A simple workflow that uses only the HTTP tool.
+  No LLM API key required - great for testing!
+
+steps:
+  - id: fetch-ip
+    name: Fetch Public IP
+    tool:
+      name: http
+      input:
+        url: "https://httpbin.org/ip"
+        method: GET
+
+  - id: fetch-headers
+    name: Fetch Request Headers
+    tool:
+      name: http
+      input:
+        url: "https://httpbin.org/headers"
+        method: GET
