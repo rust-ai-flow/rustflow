@@ -1,0 +1,16 @@
+[package]
+name = "rustflow-core"
+description = "Core types and abstractions for the RustFlow AI agent orchestration runtime"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+serde_yaml = { workspace = true }

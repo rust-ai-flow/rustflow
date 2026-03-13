@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rustflow-core",
+    "crates/rustflow-orchestrator",
+    "crates/rustflow-llm",
+    "crates/rustflow-tools",
+    "crates/rustflow-plugins",
+    "crates/rustflow-server",
+    "crates/rustflow-cli",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+authors = ["RustFlow Contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/rustflow/rustflow"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Web framework
+axum = "0.8"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Logging / Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Async traits
+async-trait = "0.1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+thiserror = "2"
+
+# IDs & time
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Utilities
+anyhow = "1"
+
+# Internal crates
+rustflow-core = { path = "crates/rustflow-core" }
+rustflow-orchestrator = { path = "crates/rustflow-orchestrator" }
+rustflow-llm = { path = "crates/rustflow-llm" }
+rustflow-tools = { path = "crates/rustflow-tools" }
+rustflow-plugins = { path = "crates/rustflow-plugins" }
+rustflow-server = { path = "crates/rustflow-server" }

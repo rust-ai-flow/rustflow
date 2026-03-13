@@ -1,0 +1,16 @@
+<svg width="160" height="36" viewBox="0 0 160 36" xmlns="http://www.w3.org/2000/svg">
+  <!-- RustFlow Logo — Wordmark Only -->
+  <style>
+    @media (prefers-color-scheme: dark) {
+      .dk { fill: #E8E6DF; }
+      .a { fill: #5DCAA5; }
+    }
+    @media (prefers-color-scheme: light) {
+      .dk { fill: #1a1a1a; }
+      .a { fill: #0F6E56; }
+    }
+  </style>
+  <text font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-weight="500" font-size="32" y="28">
+    <tspan class="dk" x="0">Rust</tspan><tspan class="a">Flow</tspan>
+  </text>
+</svg>

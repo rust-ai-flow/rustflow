@@ -1,0 +1,14 @@
+[package]
+name = "rustflow-plugins"
+description = "WASM plugin loader for RustFlow"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rustflow-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

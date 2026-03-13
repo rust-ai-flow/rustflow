@@ -1,0 +1,23 @@
+<svg width="100" height="54" viewBox="0 0 100 54" xmlns="http://www.w3.org/2000/svg">
+  <!-- RustFlow Logo — Icon Only -->
+  <style>
+    @media (prefers-color-scheme: dark) {
+      .a { fill: #5DCAA5; }
+      .a2 { fill: #5DCAA5; fill-opacity: 0.35; }
+      .a3 { fill: #5DCAA5; fill-opacity: 0.55; }
+    }
+    @media (prefers-color-scheme: light) {
+      .a { fill: #0F6E56; }
+      .a2 { fill: #0F6E56; fill-opacity: 0.3; }
+      .a3 { fill: #0F6E56; fill-opacity: 0.5; }
+    }
+  </style>
+  <g transform="translate(0, 2)">
+    <path class="a2" d="M0 9 L16 9 L24 18 L24 21 L16 13 L0 13 Z"/>
+    <path class="a3" d="M0 19 L16 19 L24 22 L24 26 L16 25 L0 25 Z"/>
+    <path class="a2" d="M0 31 L16 31 L24 27 L24 30 L16 36 L0 36 Z"/>
+    <path class="a" d="M32 4 L54 4 Q62 4, 62 12 L62 28 Q62 44, 43 49 Q24 44, 24 28 L24 12 Q24 4, 32 4 Z" opacity="0.88"/>
+    <path d="M47 14 L38 23 L44 23 L36 33 L50 22 L44 22 L49 14 Z" fill="#fff"/>
+    <path class="a" d="M62 18 L84 18 L84 12 L98 24 L84 36 L84 30 L62 30 Q62 28, 62 24 Z" opacity="0.78"/>
+  </g>
+</svg>

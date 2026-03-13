@@ -1,0 +1,22 @@
+[package]
+name = "rustflow-server"
+description = "HTTP API server for the RustFlow orchestration runtime"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rustflow-core = { workspace = true }
+rustflow-orchestrator = { workspace = true }
+rustflow-llm = { workspace = true }
+rustflow-tools = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }

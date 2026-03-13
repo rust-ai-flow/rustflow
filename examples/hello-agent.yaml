@@ -1,0 +1,60 @@
+name: hello-agent
+description: >
+  A minimal example agent that searches the web for a topic,
+  summarises the results with an LLM, then formats the summary
+  as a structured report.
+
+steps:
+  - id: search
+    name: Web Search
+    tool:
+      name: http
+      input:
+        url: "https://en.wikipedia.org/api/rest_v1/page/summary/Rust_(programming_language)"
+        method: GET
+        headers:
+          Accept: application/json
+    retry:
+      kind: fixed
+      max_retries: 3
+      interval_ms: 1000
+    timeout_ms: 10000
+
+  - id: summarize
+    name: Summarize Results
+    llm:
+      provider: anthropic
+      model: claude-3-5-haiku-20241022
+      prompt: |
+        Here is a Wikipedia extract about the Rust programming language:
+
+        {{steps.search.output}}
+
+        Please write a concise 3-paragraph summary covering:
+        1. What Rust is and its primary goals
+        2. Key features (ownership, borrowing, lifetimes)
+        3. Where Rust is commonly used today
+      temperature: 0.3
+      max_tokens: 512
+    depends_on:
+      - search
+    timeout_ms: 30000
+
+  - id: format
+    name: Format Report
+    llm:
+      provider: anthropic
+      model: claude-3-5-haiku-20241022
+      prompt: |
+        Convert the following summary into a Markdown report with:
+        - A top-level heading
+        - Numbered sections matching the 3 paragraphs
+        - A "Key Takeaways" bullet list at the end
+
+        Summary:
+        {{steps.summarize.output}}
+      temperature: 0.1
+      max_tokens: 768
+    depends_on:
+      - summarize
+    timeout_ms: 30000
