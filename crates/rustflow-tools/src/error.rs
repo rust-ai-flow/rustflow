@@ -16,6 +16,12 @@ pub enum ToolError {
 
     #[error("HTTP error: {0}")]
     Http(String),
+
+    #[error("I/O error: {0}")]
+    Io(String),
+
+    #[error("security violation in tool '{name}': {reason}")]
+    SecurityViolation { name: String, reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, ToolError>;

@@ -15,7 +15,7 @@ edition = "2024"
 version = "0.1.0"
 authors = ["RustFlow Contributors"]
 license = "Apache-2.0"
-repository = "https://github.com/rustflow/rustflow"
+repository = "https://github.com/rust-ai-flow/rustflow"
 
 [workspace.dependencies]
 # Async runtime
@@ -49,6 +49,12 @@ thiserror = "2"
 # IDs & time
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
+
+# Terminal UI
+crossterm = "0.28"
+
+# Encoding
+base64 = "0.22"
 
 # Utilities
 anyhow = "1"

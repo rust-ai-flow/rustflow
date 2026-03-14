@@ -168,4 +168,65 @@ mod tests {
         assert_eq!(result["url"], "https://example.com");
         assert_eq!(result["method"], "GET");
     }
+
+    #[test]
+    fn test_interpolate_prompt_no_placeholders() {
+        let ctx = Context::new();
+        let result = interpolate_prompt("no placeholders here", &ctx);
+        assert_eq!(result, "no placeholders here");
+    }
+
+    #[test]
+    fn test_interpolate_prompt_non_string_value() {
+        let mut ctx = Context::new();
+        ctx.set_step_output(
+            &StepId::new("calc"),
+            Value::from(serde_json::json!({"count": 42})),
+        );
+        let result = interpolate_prompt("Result: {{steps.calc.output}}", &ctx);
+        assert_eq!(result, "Result: {\"count\":42}");
+    }
+
+    #[test]
+    fn test_interpolate_prompt_multiple_placeholders() {
+        let mut ctx = Context::new();
+        ctx.set_step_output(&StepId::new("a"), Value::from(serde_json::json!("AAA")));
+        ctx.set_step_output(&StepId::new("b"), Value::from(serde_json::json!("BBB")));
+        let result = interpolate_prompt("{{steps.a.output}} and {{steps.b.output}}", &ctx);
+        assert_eq!(result, "AAA and BBB");
+    }
+
+    #[test]
+    fn test_interpolate_prompt_missing_step_leaves_placeholder() {
+        let ctx = Context::new();
+        let result = interpolate_prompt("{{steps.missing.output}}", &ctx);
+        assert_eq!(result, "{{steps.missing.output}}");
+    }
+
+    #[test]
+    fn test_interpolate_json_nested_array() {
+        let mut ctx = Context::new();
+        ctx.set_step_output(&StepId::new("s1"), Value::from(serde_json::json!("val")));
+
+        let input = serde_json::json!({
+            "items": ["{{steps.s1.output}}", "static"]
+        });
+        let result = interpolate_json(&input, &ctx);
+        assert_eq!(result["items"][0], "val");
+        assert_eq!(result["items"][1], "static");
+    }
+
+    #[test]
+    fn test_interpolate_json_preserves_non_string_types() {
+        let ctx = Context::new();
+        let input = serde_json::json!({
+            "count": 42,
+            "flag": true,
+            "nothing": null
+        });
+        let result = interpolate_json(&input, &ctx);
+        assert_eq!(result["count"], 42);
+        assert_eq!(result["flag"], true);
+        assert!(result["nothing"].is_null());
+    }
 }
