@@ -23,8 +23,8 @@ steps:
   - id: summarize
     name: Summarize Results
     llm:
-      provider: anthropic
-      model: claude-3-5-haiku-20241022
+      provider: ollama
+      model: qwen3:8b
       prompt: |
         Here is a Wikipedia extract about the Rust programming language:
 
@@ -35,7 +35,7 @@ steps:
         2. Key features (ownership, borrowing, lifetimes)
         3. Where Rust is commonly used today
       temperature: 0.3
-      max_tokens: 512
+      max_tokens: 1000
     depends_on:
       - search
     timeout_ms: 30000
@@ -43,8 +43,8 @@ steps:
   - id: format
     name: Format Report
     llm:
-      provider: anthropic
-      model: claude-3-5-haiku-20241022
+      provider: ollama
+      model: qwen3:8b
       prompt: |
         Convert the following summary into a Markdown report with:
         - A top-level heading
@@ -54,7 +54,7 @@ steps:
         Summary:
         {{steps.summarize.output}}
       temperature: 0.1
-      max_tokens: 768
+      max_tokens: 1000
     depends_on:
       - summarize
     timeout_ms: 30000

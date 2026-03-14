@@ -1,0 +1,16 @@
+{
+  "name": "rustflow",
+  "version": "1.0.1",
+  "description": "High-performance AI Agent orchestration runtime — redefining agent infrastructure with Rust.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "rust",
+    "ai",
+    "agent"
+  ],
+  "author": "73",
+  "license": "ISC"
+}

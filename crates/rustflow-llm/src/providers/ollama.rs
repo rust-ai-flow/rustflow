@@ -17,8 +17,10 @@ pub struct OllamaProvider {
 
 impl OllamaProvider {
     pub fn new() -> Self {
+        use std::env;
+        let base_url = env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
         Self {
-            base_url: DEFAULT_BASE_URL.to_string(),
+            base_url,
             client: reqwest::Client::new(),
         }
     }

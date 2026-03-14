@@ -51,7 +51,15 @@ async fn main() {
     let cli = Cli::parse();
 
     // Initialise tracing.
-    let level = if cli.verbose { "debug" } else { "info" };
+    // For the `run` command, default to warn level to avoid interference with
+    // the live progress display. Use --verbose to see debug/info logs.
+    let level = if cli.verbose {
+        "debug"
+    } else if matches!(cli.command, Commands::Run(_)) {
+        "warn"
+    } else {
+        "info"
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
