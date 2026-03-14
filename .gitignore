@@ -57,3 +57,8 @@ coverage/
 # Benchmarks output
 benches/*.txt
 criterion/
+
+.env
+
+apps/playground/node_modules
+apps/playground/dist

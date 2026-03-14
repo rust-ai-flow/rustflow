@@ -4,7 +4,7 @@ use clap::Args;
 #[derive(Args, Debug)]
 pub struct ServeArgs {
     /// Address to bind the server to.
-    #[arg(short, long, default_value = "127.0.0.1")]
+    #[arg(short = 'H', long, default_value = "127.0.0.1")]
     pub host: String,
 
     /// Port to listen on.
