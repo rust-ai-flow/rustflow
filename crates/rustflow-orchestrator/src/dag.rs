@@ -156,4 +156,75 @@ mod tests {
         let err = DagParser::parse(&steps).unwrap_err();
         assert!(matches!(err, OrchestratorError::UnknownDependency { .. }));
     }
+
+    #[test]
+    fn test_empty_dag() {
+        let steps: Vec<Step> = vec![];
+        let order = DagParser::parse(&steps).unwrap();
+        assert!(order.is_empty());
+    }
+
+    #[test]
+    fn test_single_step() {
+        let steps = vec![tool_step("only", vec![])];
+        let order = DagParser::parse(&steps).unwrap();
+        assert_eq!(order, vec![StepId::from("only")]);
+    }
+
+    #[test]
+    fn test_diamond_dag() {
+        //     a
+        //    / \
+        //   b   c
+        //    \ /
+        //     d
+        let steps = vec![
+            tool_step("a", vec![]),
+            tool_step("b", vec!["a"]),
+            tool_step("c", vec!["a"]),
+            tool_step("d", vec!["b", "c"]),
+        ];
+        let order = DagParser::parse(&steps).unwrap();
+        // "a" must come first, "d" must come last
+        assert_eq!(order[0], StepId::from("a"));
+        assert_eq!(order[3], StepId::from("d"));
+        // b and c can be in either order
+        let mid: Vec<&StepId> = order[1..3].iter().collect();
+        assert!(mid.contains(&&StepId::from("b")));
+        assert!(mid.contains(&&StepId::from("c")));
+    }
+
+    #[test]
+    fn test_parallel_independent_steps() {
+        let steps = vec![
+            tool_step("a", vec![]),
+            tool_step("b", vec![]),
+            tool_step("c", vec![]),
+        ];
+        let order = DagParser::parse(&steps).unwrap();
+        assert_eq!(order.len(), 3);
+    }
+
+    #[test]
+    fn test_self_cycle() {
+        let steps = vec![tool_step("a", vec!["a"])];
+        let err = DagParser::parse(&steps).unwrap_err();
+        assert!(matches!(err, OrchestratorError::CycleDetected { .. }));
+    }
+
+    #[test]
+    fn test_build_dependency_map() {
+        let steps = vec![
+            tool_step("a", vec![]),
+            tool_step("b", vec!["a"]),
+            tool_step("c", vec!["a", "b"]),
+        ];
+        let map = DagParser::build_dependency_map(&steps);
+        assert!(map["a"].is_empty());
+        assert_eq!(map["b"], HashSet::from(["a".to_string()]));
+        assert_eq!(
+            map["c"],
+            HashSet::from(["a".to_string(), "b".to_string()])
+        );
+    }
 }
