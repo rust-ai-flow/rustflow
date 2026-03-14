@@ -7,8 +7,9 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
+use rustflow_core::circuit_breaker::CircuitBreakerRegistry;
 use rustflow_core::context::Context;
-use rustflow_core::step::{Step, StepState};
+use rustflow_core::step::{Step, StepKind, StepState};
 use rustflow_core::types::{StepId, Value};
 
 use crate::dag::DagParser;
@@ -35,6 +36,8 @@ pub enum SchedulerEvent {
         step_id: String,
         step_name: String,
         elapsed: Duration,
+        /// The step's output value (JSON).
+        output: serde_json::Value,
     },
     /// A step failed (may be retried).
     StepFailed {
@@ -51,6 +54,18 @@ pub enum SchedulerEvent {
         step_name: String,
         attempt: u32,
     },
+    /// A circuit breaker transitioned from Closed/HalfOpen → Open.
+    ///
+    /// `resource` is the LLM provider name or tool name being protected.
+    CircuitBreakerOpened {
+        resource: String,
+    },
+    /// A circuit breaker transitioned from HalfOpen → Closed.
+    ///
+    /// `resource` is the LLM provider name or tool name being protected.
+    CircuitBreakerClosed {
+        resource: String,
+    },
 }
 
 /// Tracks mutable per-step runtime state.
@@ -60,6 +75,15 @@ struct StepStatus {
     attempts: u32,
 }
 
+/// Returns the circuit-breaker resource key for a step:
+/// the LLM provider name or the tool name.
+fn cb_resource_key(step: &Step) -> &str {
+    match &step.kind {
+        StepKind::Llm(cfg) => &cfg.provider,
+        StepKind::Tool(cfg) => &cfg.tool,
+    }
+}
+
 /// Executes an agent's steps in DAG order, honouring dependency constraints.
 ///
 /// Steps whose dependencies are all satisfied are launched concurrently via
@@ -67,11 +91,24 @@ struct StepStatus {
 /// finishes.
 pub struct Scheduler {
     executor: Arc<dyn StepExecutor>,
+    cb_registry: Option<Arc<CircuitBreakerRegistry>>,
 }
 
 impl Scheduler {
     pub fn new(executor: Arc<dyn StepExecutor>) -> Self {
-        Self { executor }
+        Self {
+            executor,
+            cb_registry: None,
+        }
+    }
+
+    /// Attach a [`CircuitBreakerRegistry`] to this scheduler.
+    ///
+    /// Each LLM provider name and tool name gets its own breaker, created on
+    /// first use with the registry's default config.
+    pub fn with_circuit_breaker(mut self, registry: Arc<CircuitBreakerRegistry>) -> Self {
+        self.cb_registry = Some(registry);
+        self
     }
 
     /// Run all steps, returning the final `Context` on success.
@@ -153,12 +190,43 @@ impl Scheduler {
             };
 
             for step_id in ready {
+                let step_clone = steps_by_id[&step_id].clone();
+
+                // ── Circuit-breaker check ─────────────────────────────────────
+                if let Some(reg) = &self.cb_registry {
+                    let resource = cb_resource_key(&step_clone).to_string();
+                    let cb = reg.get_or_create(&resource);
+                    if !cb.allow_request() {
+                        warn!(
+                            step_id = %step_id,
+                            resource = %resource,
+                            "circuit breaker open — step rejected"
+                        );
+                        on_event(SchedulerEvent::CircuitBreakerOpened {
+                            resource: resource.clone(),
+                        });
+                        // Immediately mark the step as failed (no retry).
+                        statuses.lock().await.get_mut(&step_id).unwrap().state =
+                            StepState::Failed;
+                        on_event(SchedulerEvent::StepFailed {
+                            step_id: step_id.clone(),
+                            step_name: step_clone.name.clone(),
+                            error: format!(
+                                "circuit breaker open for '{resource}'"
+                            ),
+                            will_retry: false,
+                            attempt: 1,
+                            elapsed: Duration::ZERO,
+                        });
+                        continue;
+                    }
+                }
+
                 // Mark as running.
                 statuses.lock().await.get_mut(&step_id).unwrap().state = StepState::Running;
 
                 in_flight.insert(step_id.clone());
 
-                let step_clone = steps_by_id[&step_id].clone();
                 let executor = Arc::clone(&self.executor);
                 let ctx_clone = ctx_shared.lock().await.clone();
                 let sid = step_id.clone();
@@ -202,11 +270,26 @@ impl Scheduler {
             match join_set.join_next().await {
                 Some(Ok((step_id, Ok(value), elapsed))) => {
                     info!(step_id = %step_id, "step succeeded");
+
+                    // Record success in circuit breaker (may close HalfOpen).
+                    if let Some(reg) = &self.cb_registry {
+                        let resource = cb_resource_key(&steps_by_id[&step_id]).to_string();
+                        let cb = reg.get_or_create(&resource);
+                        if cb.record_success() {
+                            info!(resource = %resource, "circuit breaker closed");
+                            on_event(SchedulerEvent::CircuitBreakerClosed {
+                                resource: resource.clone(),
+                            });
+                        }
+                    }
+
                     let step_name = steps_by_id[&step_id].name.clone();
+                    let output_json = value.inner().clone();
                     on_event(SchedulerEvent::StepSucceeded {
                         step_id: step_id.clone(),
                         step_name,
                         elapsed,
+                        output: output_json,
                     });
                     let sid = StepId::new(&step_id);
                     ctx_shared.lock().await.set_step_output(&sid, value);
@@ -215,6 +298,19 @@ impl Scheduler {
                 }
                 Some(Ok((step_id, Err(err_msg), elapsed))) => {
                     warn!(step_id = %step_id, error = %err_msg, "step failed");
+
+                    // Record failure in circuit breaker (may open circuit).
+                    if let Some(reg) = &self.cb_registry {
+                        let resource = cb_resource_key(&steps_by_id[&step_id]).to_string();
+                        let cb = reg.get_or_create(&resource);
+                        if cb.record_failure() {
+                            warn!(resource = %resource, "circuit breaker opened");
+                            on_event(SchedulerEvent::CircuitBreakerOpened {
+                                resource: resource.clone(),
+                            });
+                        }
+                    }
+
                     let step = &steps_by_id[&step_id];
                     let (should_retry, delay, attempt) = {
                         let mut sg = statuses.lock().await;
@@ -442,5 +538,147 @@ mod tests {
         initial_ctx.set_var("key", Value::from(serde_json::json!("value")));
         let ctx = scheduler.run(&steps, initial_ctx).await.unwrap();
         assert_eq!(ctx.get_var("key").unwrap().as_str(), Some("value"));
+    }
+
+    // ── Circuit-breaker integration ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_cb_step_succeeds_records_success() {
+        use rustflow_core::circuit_breaker::{CbState, CircuitBreakerConfig, CircuitBreakerRegistry};
+
+        let reg = Arc::new(CircuitBreakerRegistry::with_default_config(
+            CircuitBreakerConfig {
+                failure_threshold: 3,
+                success_threshold: 1,
+                timeout_ms: 60_000,
+            },
+        ));
+
+        let scheduler = Scheduler::new(Arc::new(SuccessExecutor))
+            .with_circuit_breaker(Arc::clone(&reg));
+
+        let steps = vec![tool_step("a", vec![])];
+        scheduler.run(&steps, Context::new()).await.unwrap();
+
+        let cb = reg.get("noop").unwrap();
+        // After one success the breaker should remain Closed.
+        assert_eq!(cb.cb_state(), CbState::Closed);
+    }
+
+    #[tokio::test]
+    async fn test_cb_opens_after_failure_threshold() {
+        use rustflow_core::circuit_breaker::{CbState, CircuitBreakerConfig, CircuitBreakerRegistry};
+
+        // failure_threshold = 2: after 2 consecutive failures the circuit opens.
+        // The step has max_retries = 3:
+        //   attempt 1 → fails → 1st failure recorded (Closed)
+        //   attempt 2 → fails → 2nd failure → CB opens (emits CircuitBreakerOpened)
+        //   attempt 3 → CB check open → rejected → step marked Failed immediately
+        let reg = Arc::new(CircuitBreakerRegistry::with_default_config(
+            CircuitBreakerConfig {
+                failure_threshold: 2,
+                success_threshold: 1,
+                timeout_ms: 60_000,
+            },
+        ));
+
+        let mut events: Vec<SchedulerEvent> = Vec::new();
+        let scheduler = Scheduler::new(Arc::new(FailExecutor))
+            .with_circuit_breaker(Arc::clone(&reg));
+
+        let steps = vec![
+            Step::new_tool("a", "a", "noop", serde_json::Value::Null)
+                .with_retry(RetryPolicy::Fixed {
+                    max_retries: 3,
+                    interval_ms: 0,
+                }),
+        ];
+        let _ = scheduler
+            .run_with_events(&steps, Context::new(), |e| events.push(e))
+            .await;
+
+        let cb = reg.get("noop").unwrap();
+        assert_eq!(cb.cb_state(), CbState::Open);
+
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SchedulerEvent::CircuitBreakerOpened { resource }
+            if resource == "noop"
+        )));
+    }
+
+    #[tokio::test]
+    async fn test_cb_open_rejects_step_immediately() {
+        use rustflow_core::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerRegistry};
+
+        let reg = Arc::new(CircuitBreakerRegistry::with_default_config(
+            CircuitBreakerConfig {
+                failure_threshold: 1,
+                success_threshold: 1,
+                timeout_ms: 60_000, // long timeout — won't recover
+            },
+        ));
+
+        // Pre-open the circuit for the "noop" tool.
+        let cb = reg.get_or_create("noop");
+        cb.record_failure(); // opens immediately (threshold = 1)
+
+        let mut events: Vec<SchedulerEvent> = Vec::new();
+        let scheduler = Scheduler::new(Arc::new(SuccessExecutor))
+            .with_circuit_breaker(Arc::clone(&reg));
+
+        let steps = vec![tool_step("a", vec![])];
+        let _ = scheduler
+            .run_with_events(&steps, Context::new(), |e| events.push(e))
+            .await;
+
+        // Should emit CircuitBreakerOpened event (from the pre-check).
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SchedulerEvent::CircuitBreakerOpened { resource }
+            if resource == "noop"
+        )));
+        // Step should not succeed (was rejected before executing).
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, SchedulerEvent::StepSucceeded { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_cb_emits_closed_event_on_recovery() {
+        use rustflow_core::circuit_breaker::{CircuitBreakerConfig, CircuitBreakerRegistry};
+        use std::time::Duration;
+
+        let reg = Arc::new(CircuitBreakerRegistry::with_default_config(
+            CircuitBreakerConfig {
+                failure_threshold: 1,
+                success_threshold: 1,
+                timeout_ms: 1, // 1 ms — recovers immediately
+            },
+        ));
+
+        // Open the circuit first.
+        let cb = reg.get_or_create("noop");
+        cb.record_failure();
+
+        // Wait for timeout to elapse so allow_request() transitions to HalfOpen.
+        std::thread::sleep(Duration::from_millis(5));
+
+        let mut events: Vec<SchedulerEvent> = Vec::new();
+        let scheduler = Scheduler::new(Arc::new(SuccessExecutor))
+            .with_circuit_breaker(Arc::clone(&reg));
+
+        let steps = vec![tool_step("a", vec![])];
+        scheduler
+            .run_with_events(&steps, Context::new(), |e| events.push(e))
+            .await
+            .unwrap();
+
+        // Should emit CircuitBreakerClosed (HalfOpen → Closed) after success.
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SchedulerEvent::CircuitBreakerClosed { resource }
+            if resource == "noop"
+        )));
     }
 }

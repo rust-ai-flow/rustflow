@@ -16,6 +16,8 @@ pub struct Agent {
     pub steps: Vec<Step>,
     /// Timestamp when this agent was created/registered.
     pub created_at: DateTime<Utc>,
+    /// Original YAML definition (optional).
+    pub yaml: Option<String>,
 }
 
 impl Agent {
@@ -27,6 +29,7 @@ impl Agent {
             description: None,
             steps,
             created_at: Utc::now(),
+            yaml: None,
         }
     }
 
@@ -38,7 +41,14 @@ impl Agent {
             description: None,
             steps,
             created_at: Utc::now(),
+            yaml: None,
         }
+    }
+
+    /// Set the original YAML definition.
+    pub fn with_yaml(mut self, yaml: impl Into<String>) -> Self {
+        self.yaml = Some(yaml.into());
+        self
     }
 
     /// Add a description.
@@ -112,8 +122,7 @@ mod tests {
 
     #[test]
     fn test_agent_serde_roundtrip() {
-        let agent = Agent::with_id("id-1", "agent-1", sample_steps())
-            .with_description("test");
+        let agent = Agent::with_id("id-1", "agent-1", sample_steps()).with_description("test");
         let json = serde_json::to_string(&agent).unwrap();
         let deserialized: Agent = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id, agent.id);
