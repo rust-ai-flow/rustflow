@@ -1,0 +1,104 @@
+name: all-tools-workflow
+description: 综合示例，展示所有内置工具的使用方法
+
+steps:
+  # 步骤 1：读取环境变量
+  - id: read_env
+    name: 读取环境变量
+    tool:
+      name: env
+      input:
+        name: "HOME"
+    retry:
+      kind: fixed
+      max_retries: 2
+      interval_ms: 500
+
+  # 步骤 2：使用 HTTP 工具获取数据
+  - id: fetch_data
+    name: 获取示例数据
+    tool:
+      name: http
+      input:
+        url: "https://jsonplaceholder.typicode.com/posts/1"
+        method: GET
+    retry:
+      kind: fixed
+      max_retries: 3
+      interval_ms: 1000
+
+  # 步骤 3：将数据写入文件
+  - id: write_data
+    name: 写入数据到文件
+    tool:
+      name: file_write
+      input:
+        path: "/tmp/rustflow_example_data.json"
+        content: "{{steps.fetch_data.output}}"
+    depends_on:
+      - fetch_data
+
+  # 步骤 4：执行 shell 命令查看文件
+  - id: check_file
+    name: 检查文件内容
+    tool:
+      name: shell
+      input:
+        command: "cat /tmp/rustflow_example_data.json | jq '.title'"
+        timeout_secs: 10
+    depends_on:
+      - write_data
+
+  # 步骤 5：读取文件内容
+  - id: read_file
+    name: 读取文件内容
+    tool:
+      name: file_read
+      input:
+        path: "/tmp/rustflow_example_data.json"
+    depends_on:
+      - write_data
+
+  # 步骤 6：使用 LLM 分析数据
+  - id: analyze_data
+    name: 分析数据
+    llm:
+      provider: ollama
+      model: qwen3:8b
+      prompt: "请分析以下 JSON 数据，提取主要信息并生成一个简洁的摘要：\n{{steps.read_file.output}}"
+      max_tokens: 500
+      temperature: 0.3
+    depends_on:
+      - read_file
+
+  # 步骤 7：将分析结果写入文件
+  - id: write_analysis
+    name: 写入分析结果
+    tool:
+      name: file_write
+      input:
+        path: "/tmp/rustflow_analysis.txt"
+        content: "{{steps.analyze_data.output}}"
+    depends_on:
+      - analyze_data
+
+  # 步骤 8：睡眠一段时间
+  - id: sleep
+    name: 等待 2 秒
+    tool:
+      name: sleep
+      input:
+        ms: 2000
+    depends_on:
+      - write_analysis
+
+  # 步骤 9：最终检查
+  - id: final_check
+    name: 最终检查
+    tool:
+      name: shell
+      input:
+        command: "ls -la /tmp/rustflow_*.{json,txt}"
+        timeout_secs: 10
+    depends_on:
+      - sleep
