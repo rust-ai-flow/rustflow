@@ -140,6 +140,52 @@ crates/
   └─────────────────────────────────────────────
 ```
 
+### WASM Plugin System (`rustflow-plugins`)
+
+Extend RustFlow with custom tools written in any language that compiles to WebAssembly.
+
+**Architecture:**
+- Plugins compile to `.wasm` and are loaded at runtime via `wasmtime` (JIT, sandboxed)
+- Each exported tool automatically becomes a `PluginTool` implementing the `Tool` trait
+- Plugin tools register into the same `ToolRegistry` as built-in tools — transparent to workflows
+
+**Plugin ABI** (what a plugin must export):
+
+| Export | Signature | Description |
+|--------|-----------|-------------|
+| `memory` | linear memory | Shared linear memory |
+| `rustflow_alloc` | `(size: i32) -> i32` | Allocate bytes, return pointer |
+| `rustflow_dealloc` | `(ptr: i32, size: i32)` | Free allocation |
+| `rustflow_plugin_manifest` | `() -> i64` | Packed `(ptr << 32 \| len)` of manifest JSON |
+| `rustflow_tool_execute` | `(name_ptr, name_len, input_ptr, input_len: i32) -> i64` | Run a tool, return packed output JSON pointer |
+
+The plugin also imports `rustflow::log(level: i32, ptr: i32, len: i32)` for host-side logging.
+
+**Manifest JSON** embedded in the plugin:
+```json
+{
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "description": "Optional description",
+  "tools": [
+    {
+      "name": "my-tool",
+      "description": "Does something useful",
+      "parameters": { "type": "object", "properties": { "input": { "type": "string" } } }
+    }
+  ]
+}
+```
+
+**Usage:**
+```rust
+let mut loader = PluginLoader::new();
+let tools = loader.load_file("plugins/my-plugin.wasm")?;
+for tool in tools {
+    tool_registry.register(tool).ok();
+}
+```
+
 ### Security Sandbox (`SecurityPolicy`)
 
 RustFlow enforces a configurable security policy across all tool execution to prevent path traversal, command injection, and credential leakage.
@@ -164,6 +210,53 @@ RustFlow enforces a configurable security policy across all tool execution to pr
 
 Policy is configured per-execution and passed to tools at construction time. See `SecurityPolicy` in `rustflow-tools` for full configuration options.
 
+### Circuit Breaker (`rustflow-core`)
+
+RustFlow's circuit breaker protects LLM providers and tools from cascading failures. It is integrated directly into the scheduler — no changes to your workflow YAML needed.
+
+**State machine:**
+
+```
+Closed ──(failure_threshold consecutive failures)──► Open
+Open   ──(timeout_ms elapsed)──────────────────────► HalfOpen
+HalfOpen──(success_threshold consecutive successes)─► Closed
+HalfOpen──(any failure)────────────────────────────► Open
+```
+
+**Per-resource isolation:** each LLM provider name (e.g. `openai`, `ollama`) and tool name (e.g. `http`, `shell`) gets its own independent breaker.
+
+**Configuration:**
+
+```rust
+CircuitBreakerConfig {
+    failure_threshold: 5,   // consecutive failures before opening
+    success_threshold: 2,   // consecutive successes in HalfOpen to close
+    timeout_ms: 30_000,     // time (ms) to stay Open before probing
+}
+```
+
+**Usage:**
+
+```rust
+let registry = Arc::new(CircuitBreakerRegistry::with_default_config(
+    CircuitBreakerConfig {
+        failure_threshold: 3,
+        success_threshold: 1,
+        timeout_ms: 10_000,
+    },
+));
+
+let scheduler = Scheduler::new(executor)
+    .with_circuit_breaker(registry);
+```
+
+**Events emitted:**
+
+| Event | Trigger |
+|-------|---------|
+| `CircuitBreakerOpened { resource }` | Circuit transitions to Open (or pre-open check blocks a step) |
+| `CircuitBreakerClosed { resource }` | Circuit transitions from HalfOpen back to Closed |
+
 ### HTTP Server (`rustflow-server`)
 
 | Endpoint | Method | Description |
@@ -173,7 +266,33 @@ Policy is configured per-execution and passed to tools at construction time. See
 | `/agents` | GET | List all agents |
 | `/agents/{id}` | GET | Get agent details |
 | `/agents/{id}` | DELETE | Delete an agent |
-| `/agents/{id}/run` | POST | Execute an agent workflow |
+| `/agents/{id}/run` | POST | Execute an agent workflow (blocking, returns outputs) |
+| `/agents/{id}/stream` | **WS** | Execute an agent with real-time event streaming |
+| `/playground` | GET | Web Playground UI |
+| `/playground/agents` | POST | Create an agent from YAML (used by the Playground) |
+
+### WebSocket Streaming (`/agents/{id}/stream`)
+
+Connect via WebSocket to stream live execution events as JSON frames.
+
+**Client → Server (one message to start):**
+```json
+{ "vars": { "topic": "Rust", "lang": "English" } }
+```
+
+**Server → Client (streamed frames):**
+```json
+{"type":"step_started",   "step_id":"fetch","step_name":"Fetch Data"}
+{"type":"step_succeeded", "step_id":"fetch","step_name":"Fetch Data","elapsed_ms":820,"output":{…}}
+{"type":"step_failed",    "step_id":"s2","step_name":"Summarise","error":"…","will_retry":true,"attempt":1,"elapsed_ms":12}
+{"type":"step_retrying",  "step_id":"s2","step_name":"Summarise","attempt":2}
+{"type":"circuit_breaker_opened","resource":"ollama"}
+{"type":"circuit_breaker_closed","resource":"ollama"}
+{"type":"workflow_completed","outputs":{"fetch":{…},"summarise":"…"}}
+{"type":"workflow_failed","error":"step 'fetch' failed after all retries"}
+```
+
+After `workflow_completed` or `workflow_failed` the server closes the connection.
 
 ## Quick Start
 
@@ -280,13 +399,13 @@ curl -X POST http://localhost:18790/agents/{id}/run \
 | CLI parsing | clap (derive) |
 | Error handling | thiserror + anyhow |
 | Plugin sandbox | wasmtime (planned) |
-| Testing | tokio::test, 327 unit tests |
+| Testing | tokio::test, 367 unit tests |
 
 ## Development
 
 ```bash
 cargo build                          # Build all crates
-cargo test                           # Run all tests (298)
+cargo test                           # Run all tests (367)
 cargo clippy --all-targets           # Lint
 cargo fmt --all -- --check           # Check formatting
 cargo run -- doctor                  # Check dev environment
@@ -315,10 +434,10 @@ export ANTHROPIC_API_KEY=sk-ant-...
 - [x] CLI tools (run, init, serve, doctor)
 - [x] Live flowchart progress display (DAG visualization, spinner animation, color-coded status)
 - [x] Security sandbox (filesystem jail, shell whitelist, env redaction)
-- [ ] WASM plugin system (wasmtime)
-- [ ] Circuit breaker
-- [ ] WebSocket real-time streaming
-- [ ] Web Playground UI
+- [x] WASM plugin system (wasmtime)
+- [x] Circuit breaker (Closed/Open/HalfOpen state machine, per-resource, scheduler-integrated)
+- [x] WebSocket real-time streaming (`/agents/{id}/stream`, per-step event frames + final output)
+- [x] Web Playground UI (single-file HTML + React/TS source, embedded in `/playground`)
 - [ ] Python SDK (PyO3)
 - [ ] TypeScript SDK
 - [ ] Prometheus metrics + OpenTelemetry

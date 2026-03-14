@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RustFlow Playground</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              rust: {
+                DEFAULT: "#F97316",
+                hover: "#EA6C0A",
+                light: "#FED7AA",
+                faint: "#FFF7ED",
+              },
+            },
+            fontFamily: {
+              sans: ["Inter", "system-ui", "sans-serif"],
+              mono: ["JetBrains Mono", "Menlo", "monospace"],
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      /* ── Reset & base ─────────────────────────────────────────────────────── */
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        font-family: "Inter", system-ui, sans-serif;
+        background: #fafaf9;
+        color: #1e293b;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ── Full-page skeleton (pure CSS — not Tailwind) ────────────────────── */
+      #root {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        width: 100vw;
+      }
+      #hdr {
+        display: flex;
+        align-items: center;
+        height: 44px;
+        flex-shrink: 0;
+        background: #fff;
+        border-bottom: 1px solid #e2e8f0;
+        padding: 0 16px;
+        gap: 12px;
+        z-index: 10;
+      }
+      #body {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+        min-height: 0;
+      }
+      #sidebar {
+        width: 240px;
+        min-width: 240px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        background: #0f172a;
+        border-right: 1px solid #1e293b;
+        overflow: hidden;
+      }
+      #edpanel {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        background: #0d1117;
+        overflow: hidden;
+      }
+      #edtabs {
+        display: flex;
+        align-items: center;
+        height: 38px;
+        flex-shrink: 0;
+        background: #161b22;
+        border-bottom: 1px solid #30363d;
+        padding: 0 12px;
+        gap: 6px;
+      }
+      #edbody {
+        flex: 1;
+        display: flex;
+        overflow: hidden;
+        min-height: 0;
+      }
+      #edstatus {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 22px;
+        flex-shrink: 0;
+        background: #161b22;
+        border-top: 1px solid #30363d;
+        padding: 0 16px;
+        color: #6b7280;
+        font-size: 11px;
+        font-family: "JetBrains Mono", monospace;
+      }
+      #execpanel {
+        width: 360px;
+        min-width: 360px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        background: #fff;
+        border-left: 1px solid #e2e8f0;
+        overflow: hidden;
+      }
+
+      /* ── Line numbers ─────────────────────────────────────────────────────── */
+      #lnums {
+        padding: 16px 10px 16px 6px;
+        color: #4b5563;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 13px;
+        line-height: 21px;
+        text-align: right;
+        user-select: none;
+        min-width: 42px;
+        flex-shrink: 0;
+        border-right: 1px solid #1f2937;
+        overflow: hidden;
+        white-space: pre; /* ← lets \n create real rows */
+      }
+
+      /* ── Code editor ──────────────────────────────────────────────────────── */
+      #editor {
+        flex: 1;
+        padding: 16px 16px 16px 14px;
+        background: transparent;
+        color: #e2e8f0;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 13px;
+        line-height: 21px;
+        border: none;
+        outline: none;
+        resize: none;
+        overflow-y: auto;
+        caret-color: #f97316;
+        tab-size: 2;
+        white-space: pre;
+      }
+      #editor::selection {
+        background: rgba(249, 115, 22, 0.2);
+      }
+
+      /* ── Spinners ─────────────────────────────────────────────────────────── */
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .spin {
+        animation: spin 0.9s linear infinite;
+        transform-origin: center;
+      }
+
+      /* ── Step card transition ─────────────────────────────────────────────── */
+      .step-card {
+        transition: border-color 0.25s;
+      }
+      @keyframes fadeUp {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .fade-up {
+        animation: fadeUp 0.2s ease forwards;
+      }
+
+      /* ── Toast ────────────────────────────────────────────────────────────── */
+      #toasts {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 100;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        pointer-events: none;
+      }
+      .toast {
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        background: #1e293b;
+        color: #f8fafc;
+        font-size: 13px;
+        border-radius: 8px;
+        max-width: 320px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+        animation: fadeUp 0.2s ease;
+      }
+      .toast.err {
+        border-left: 3px solid #ef4444;
+      }
+      .toast.ok {
+        border-left: 3px solid #22c55e;
+      }
+      .toast.info {
+        border-left: 3px solid #f97316;
+      }
+      @keyframes fadeOut {
+        to {
+          opacity: 0;
+          transform: translateX(16px);
+        }
+      }
+
+      /* ── Sample dropdown ──────────────────────────────────────────────────── */
+      #sampledrop {
+        position: absolute;
+        top: calc(100% + 4px);
+        right: 0;
+        z-index: 50;
+        background: #1e293b;
+        border: 1px solid #374151;
+        border-radius: 8px;
+        min-width: 210px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        display: none;
+        overflow: hidden;
+      }
+      #sampledrop.open {
+        display: block;
+      }
+
+      /* ── Scrollbar ────────────────────────────────────────────────────────── */
+      ::-webkit-scrollbar {
+        width: 5px;
+        height: 5px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #374151;
+        border-radius: 3px;
+      }
+      #sidebar ::-webkit-scrollbar-thumb {
+        background: #1e293b;
+      }
+      .exec-scroll ::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

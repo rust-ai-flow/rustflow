@@ -111,7 +111,7 @@ impl LiveProgress {
                 }
             }
             SchedulerEvent::StepSucceeded {
-                step_id, elapsed, ..
+                step_id, elapsed, ..  // `output` intentionally ignored in terminal display
             } => {
                 if let Some(sd) = self.steps.get_mut(step_id) {
                     sd.state = StepState::Success;
@@ -141,6 +141,10 @@ impl LiveProgress {
                     sd.start_time = Some(Instant::now());
                 }
             }
+            // Circuit breaker events don't change individual step display;
+            // they are handled at the workflow summary level.
+            SchedulerEvent::CircuitBreakerOpened { .. }
+            | SchedulerEvent::CircuitBreakerClosed { .. } => {}
         }
     }
 

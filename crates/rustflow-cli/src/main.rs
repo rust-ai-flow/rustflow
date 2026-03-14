@@ -48,6 +48,11 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
+    // Load .env file
+    if let Err(e) = dotenvy::dotenv() {
+        eprintln!("Warning: Could not load .env file: {}", e);
+    }
+    
     let cli = Cli::parse();
 
     // Initialise tracing.

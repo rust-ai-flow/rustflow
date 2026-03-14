@@ -4,8 +4,11 @@ use tokio::sync::RwLock;
 
 use rustflow_core::agent::Agent;
 use rustflow_core::types::AgentId;
-use rustflow_llm::LlmGateway;
-use rustflow_tools::ToolRegistry;
+use rustflow_llm::{LlmGateway, providers::ollama::OllamaProvider};
+use rustflow_tools::{
+    EnvTool, FileReadTool, FileWriteTool, HttpTool, JsonExtractTool, ShellTool, SleepTool,
+    ToolRegistry,
+};
 
 /// Shared application state injected into every request handler via axum's
 /// `State` extractor.
@@ -21,10 +24,24 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        let mut tool_registry = ToolRegistry::new();
+        // Register all built-in tools
+        tool_registry.register(HttpTool::new()).ok();
+        tool_registry.register(FileReadTool::new()).ok();
+        tool_registry.register(FileWriteTool::new()).ok();
+        tool_registry.register(ShellTool::new()).ok();
+        tool_registry.register(JsonExtractTool::new()).ok();
+        tool_registry.register(EnvTool::new()).ok();
+        tool_registry.register(SleepTool::new()).ok();
+
+        let mut llm_gateway = LlmGateway::new();
+        // Register Ollama provider (no API key required)
+        llm_gateway.register(OllamaProvider::new());
+
         Self {
             agents: Arc::new(RwLock::new(HashMap::new())),
-            llm_gateway: Arc::new(LlmGateway::new()),
-            tool_registry: Arc::new(ToolRegistry::new()),
+            llm_gateway: Arc::new(llm_gateway),
+            tool_registry: Arc::new(tool_registry),
         }
     }
 
