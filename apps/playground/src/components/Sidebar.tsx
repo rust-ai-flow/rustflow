@@ -3,6 +3,8 @@ import type { AgentSummary } from '../types';
 
 interface SidebarProps {
   agents: AgentSummary[];
+  selectedAgentId: string | null;
+  activeRuns: Set<string>;
   onNew: () => void;
   onAgentSelect: (agentId: string) => void;
 }
@@ -28,7 +30,7 @@ function FileIcon() {
   );
 }
 
-export function Sidebar({ agents, onNew, onAgentSelect }: SidebarProps) {
+export function Sidebar({ agents, selectedAgentId, activeRuns, onNew, onAgentSelect }: SidebarProps) {
   const [serverOnline, setServerOnline] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -79,24 +81,55 @@ export function Sidebar({ agents, onNew, onAgentSelect }: SidebarProps) {
           {agents.length === 0 ? (
             <div className="text-xs text-slate-600 py-2 px-2">No workflows yet</div>
           ) : (
-            agents.map(agent => (
-              <div
-                key={agent.id}
-                className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-slate-800 transition-colors group"
-                title={agent.description ?? agent.name}
-                onClick={() => onAgentSelect(agent.id)}
-              >
-                <div className="mt-0.5 shrink-0">
-                  <FileIcon />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs text-slate-300 truncate">{agent.name}</div>
-                  <div className="text-xs text-slate-600">
-                    {agent.step_count} step{agent.step_count !== 1 ? 's' : ''}
+            agents.map(agent => {
+              const isSelected = selectedAgentId === agent.id;
+              const isRunning = activeRuns.has(agent.id);
+              return (
+                <div
+                  key={agent.id}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors group"
+                  style={
+                    isSelected
+                      ? { background: '#1E3A5F', borderLeft: '2px solid #F97316', paddingLeft: 6 }
+                      : {}
+                  }
+                  title={agent.description ?? agent.name}
+                  onClick={() => onAgentSelect(agent.id)}
+                  onMouseEnter={e => {
+                    if (!isSelected)
+                      (e.currentTarget as HTMLDivElement).style.background = '#1E293B';
+                  }}
+                  onMouseLeave={e => {
+                    if (!isSelected)
+                      (e.currentTarget as HTMLDivElement).style.background = '';
+                  }}
+                >
+                  <div className="mt-0.5 shrink-0">
+                    <FileIcon />
                   </div>
+                  <div className="flex-1 min-w-0">
+                    <div
+                      className="text-xs truncate"
+                      style={{ color: isSelected ? '#F8FAFC' : '#CBD5E1' }}
+                    >
+                      {agent.name}
+                    </div>
+                    <div className="text-xs text-slate-600">
+                      {agent.step_count} step{agent.step_count !== 1 ? 's' : ''}
+                    </div>
+                  </div>
+                  {/* Running indicator */}
+                  {isRunning && (
+                    <div className="shrink-0">
+                      <div
+                        className="w-2 h-2 rounded-full animate-pulse"
+                        style={{ background: '#F97316' }}
+                      />
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>

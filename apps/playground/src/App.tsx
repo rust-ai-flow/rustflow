@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import jsyaml from 'js-yaml';
+import { RustFlowError } from 'rustflow';
 import { Sidebar } from './components/Sidebar';
 import { WorkflowEditor, SAMPLES } from './components/WorkflowEditor';
 import { ExecutionPanel } from './components/ExecutionPanel';
 import { useAgents } from './hooks/useAgents';
-import { useWebSocket } from './hooks/useWebSocket';
+import { useRunManager } from './hooks/useRunManager';
+import { client } from './lib/client';
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 
@@ -20,7 +22,7 @@ function ToastContainer({ toasts, onRemove }: { toasts: Toast[]; onRemove: (id: 
       {toasts.map(toast => (
         <div
           key={toast.id}
-          className={`flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg text-sm max-w-md cursor-pointer`}
+          className="flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg text-sm max-w-md cursor-pointer"
           style={{
             background: '#1E293B',
             color: '#F8FAFC',
@@ -42,6 +44,7 @@ export default function App() {
   const [vars, setVars] = useState('{}');
   const [workflowName, setWorkflowName] = useState('hello-playground');
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
   const { agents, refresh: refreshAgents } = useAgents(5000);
 
@@ -55,7 +58,19 @@ export default function App() {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  // Update breadcrumb name when YAML changes
+  const runManagerOptions = React.useMemo(() => ({
+    onCompleted: (_agentId: string, _outputs: Record<string, unknown>) => {
+      showToast('Workflow completed', 'success');
+      void refreshAgents();
+    },
+    onFailed: (_agentId: string, error: string) => {
+      showToast(`Workflow failed: ${error}`, 'error');
+    },
+  }), [showToast, refreshAgents]);
+
+  const { getSnapshot, activeRuns, startRun } = useRunManager(runManagerOptions);
+
+  // Update breadcrumb when YAML changes.
   useEffect(() => {
     try {
       const doc = jsyaml.load(yaml) as { name?: string } | null;
@@ -63,30 +78,13 @@ export default function App() {
     } catch { /* ignore */ }
   }, [yaml]);
 
-  const ws = useWebSocket({
-    onCompleted: () => {
-      showToast('Workflow completed', 'success');
-      void refreshAgents();
-    },
-    onFailed: (error) => {
-      showToast(`Workflow failed: ${error}`, 'error');
-    },
-  });
-
-  const [isRunning, setIsRunning] = useState(false);
-
   const runWorkflow = async () => {
-    if (isRunning) return;
-
-    // Validate YAML
-    try {
-      jsyaml.load(yaml);
-    } catch (e: unknown) {
+    try { jsyaml.load(yaml); }
+    catch (e: unknown) {
       showToast('YAML parse error: ' + (e instanceof Error ? e.message : String(e)), 'error');
       return;
     }
 
-    // Parse vars
     let parsedVars: Record<string, unknown> = {};
     try {
       const raw = vars.trim();
@@ -96,76 +94,43 @@ export default function App() {
       return;
     }
 
-    setIsRunning(true);
-    ws.reset();
-
     try {
-      const createRes = await fetch('/playground/agents', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yaml }),
-      });
-
-      if (!createRes.ok) {
-        const errData = await createRes.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
-        throw new Error(errData.error ?? `Server error: ${createRes.status}`);
-      }
-
-      const { id } = await createRes.json() as { id: string };
-      ws.connect(id, parsedVars);
+      const { id } = await client.createFromYaml(yaml);
+      setSelectedAgentId(id);
+      startRun(id, parsedVars);
     } catch (e: unknown) {
-      showToast(e instanceof Error ? e.message : String(e), 'error');
-      setIsRunning(false);
-      return;
+      showToast(e instanceof RustFlowError ? e.message : String(e), 'error');
     }
-
-    setIsRunning(false);
   };
 
   const handleNew = () => {
-    if (isRunning) return;
     setYaml(SAMPLES.hello);
-    ws.reset();
+    setSelectedAgentId(null);
   };
 
   const handleAgentSelect = async (agentId: string) => {
-    if (isRunning) return;
     try {
-      const res = await fetch(`/agents/${agentId}`);
-      if (!res.ok) {
-        throw new Error(`Failed to fetch agent: ${res.status}`);
-      }
-      const agent = await res.json();
-      if (agent.yaml) {
-        setYaml(agent.yaml);
-      } else {
-        // Fallback: Build YAML from agent object if yaml field is not available
-        const yamlContent = `name: ${agent.name}\n${agent.description ? `description: ${agent.description}\n` : ''}\nsteps:\n${agent.steps.map((step: any) => {
-          let stepYaml = `  - id: ${step.id}\n    name: ${step.name}\n`;
-          if (step.tool) {
-            stepYaml += `    tool:\n      name: ${step.tool.name}\n`;
-            if (step.tool.input) {
-              stepYaml += `      input: ${JSON.stringify(step.tool.input, null, 6).replace(/^/gm, '        ')}\n`;
-            }
+      const agent = await client.getAgent(agentId);
+      const doc = {
+        name: agent.name,
+        ...(agent.description ? { description: agent.description } : {}),
+        steps: agent.steps.map(step => {
+          const s: Record<string, unknown> = { id: step.id, name: step.name };
+          if ('llm' in step.kind) {
+            s.llm = step.kind.llm;
+          } else {
+            s.tool = { name: step.kind.tool.tool, input: step.kind.tool.input };
           }
-          if (step.llm) {
-            stepYaml += `    llm:\n      provider: ${step.llm.provider}\n      model: ${step.llm.model}\n      prompt: "${step.llm.prompt}"\n`;
-            if (step.llm.max_tokens) {
-              stepYaml += `      max_tokens: ${step.llm.max_tokens}\n`;
-            }
-          }
-          if (step.depends_on) {
-            stepYaml += `    depends_on:\n${step.depends_on.map((dep: string) => `      - ${dep}\n`).join('')}`;
-          }
-          if (step.retry) {
-            stepYaml += `    retry:\n      kind: ${step.retry.kind}\n      max_retries: ${step.retry.max_retries}\n      interval_ms: ${step.retry.interval_ms}\n`;
-          }
-          return stepYaml;
-        }).join('')}`;
-        setYaml(yamlContent);
-      }
+          if (step.depends_on.length > 0) s.depends_on = step.depends_on;
+          if (step.retry_policy.kind !== 'none') s.retry = step.retry_policy;
+          if (step.timeout_ms != null) s.timeout_ms = step.timeout_ms;
+          return s;
+        }),
+      };
+      setYaml(jsyaml.dump(doc, { indent: 2, lineWidth: 120 }));
+      setSelectedAgentId(agentId);
     } catch (e: unknown) {
-      showToast(e instanceof Error ? e.message : String(e), 'error');
+      showToast(e instanceof RustFlowError ? e.message : String(e), 'error');
     }
   };
 
@@ -173,8 +138,8 @@ export default function App() {
     if (e.key === 'Enter') void runWorkflow();
   };
 
-  const currentStatus = ws.runStatus;
-  const isActuallyRunning = currentStatus === 'running';
+  const displayState = getSnapshot(selectedAgentId);
+  const isCurrentRunning = selectedAgentId !== null && activeRuns.has(selectedAgentId);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ fontFamily: "'Inter', sans-serif" }}>
@@ -200,11 +165,11 @@ export default function App() {
 
         <button
           onClick={() => void runWorkflow()}
-          disabled={isActuallyRunning}
+          disabled={isCurrentRunning}
           className="flex items-center gap-2 px-4 py-1.5 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ background: '#F97316' }}
         >
-          {isActuallyRunning ? (
+          {isCurrentRunning ? (
             <svg className="animate-spin" width="14" height="14" viewBox="0 0 14 14" fill="none">
               <circle cx="7" cy="7" r="6" stroke="rgba(255,255,255,0.3)" strokeWidth="2" />
               <path d="M7 1 A6 6 0 0 1 13 7" stroke="white" strokeWidth="2" strokeLinecap="round" />
@@ -214,19 +179,25 @@ export default function App() {
               <polygon points="3,1 13,7 3,13" />
             </svg>
           )}
-          {isActuallyRunning ? 'Running...' : 'Run'}
+          {isCurrentRunning ? 'Running...' : 'Run'}
         </button>
       </header>
 
       {/* 3-column layout */}
       <div className="flex flex-1 min-h-0">
-        <Sidebar agents={agents} onNew={handleNew} onAgentSelect={handleAgentSelect} />
+        <Sidebar
+          agents={agents}
+          selectedAgentId={selectedAgentId}
+          activeRuns={activeRuns}
+          onNew={handleNew}
+          onAgentSelect={handleAgentSelect}
+        />
         <WorkflowEditor value={yaml} onChange={setYaml} onToast={showToast} />
         <ExecutionPanel
-          runStatus={ws.runStatus}
-          steps={ws.steps}
-          systemMessages={ws.systemMessages}
-          outputs={ws.outputs}
+          runStatus={displayState.runStatus}
+          steps={displayState.steps}
+          systemMessages={displayState.systemMessages}
+          outputs={displayState.outputs}
         />
       </div>
 

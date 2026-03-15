@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { client } from '../lib/client';
 import type { AgentSummary } from '../types';
 
 interface UseAgentsReturn {
@@ -13,10 +14,8 @@ export function useAgents(autoRefreshMs = 5000): UseAgentsReturn {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch('/agents', { signal: AbortSignal.timeout(3000) });
-      if (!res.ok) return;
-      const data = await res.json() as { agents: AgentSummary[] };
-      setAgents(data.agents ?? []);
+      const { agents } = await client.listAgents();
+      setAgents(agents);
     } catch {
       // Silently ignore network errors
     } finally {

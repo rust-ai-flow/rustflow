@@ -10,9 +10,9 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/agents': 'http://localhost:8080',
-      '/health': 'http://localhost:8080',
-      '/playground/agents': 'http://localhost:8080',
+      '/agents': 'http://localhost:18790',
+      '/health': 'http://localhost:18790',
+      '/playground/agents': 'http://localhost:18790',
     },
   },
 });

@@ -1,10 +1,10 @@
 name: complex-ollama-workflow
-description: 复杂工作流示例，使用公开 HTTP 接口和远程 Ollama 模型
+description: Complex workflow example using public HTTP APIs and remote Ollama models
 
 steps:
-  # 步骤 1：获取示例 JSON 数据
+  # Step 1: Fetch sample JSON data
   - id: fetch_sample_data
-    name: 获取示例 JSON 数据
+    name: Fetch Sample JSON Data
     tool:
       name: http
       input:
@@ -15,9 +15,9 @@ steps:
       max_retries: 2
       interval_ms: 1000
 
-  # 步骤 2：获取随机用户数据
+  # Step 2: Fetch random user data
   - id: fetch_random_user
-    name: 获取随机用户数据
+    name: Fetch Random User Data
     tool:
       name: http
       input:
@@ -28,9 +28,9 @@ steps:
       max_retries: 2
       interval_ms: 1000
 
-  # 步骤 3：获取猫的有趣事实
+  # Step 3: Fetch cat fact
   - id: fetch_cat_fact
-    name: 获取猫的有趣事实
+    name: Fetch Cat Fact
     tool:
       name: http
       input:
@@ -41,52 +41,52 @@ steps:
       max_retries: 2
       interval_ms: 1000
 
-  # 步骤 4：分析示例数据
+  # Step 4: Analyze sample data
   - id: analyze_sample_data
-    name: 分析示例数据
+    name: Analyze Sample Data
     llm:
       provider: ollama
       model: qwen3:8b
-      prompt: "请分析以下 JSON 数据，提取主要信息并进行详细解读：\n{{steps.fetch_sample_data.output}}"
+      prompt: "Please analyze the following JSON data, extract key information and provide a detailed interpretation:\n{{steps.fetch_sample_data.output}}"
       max_tokens: 50000
       temperature: 0.7
     depends_on:
       - fetch_sample_data
     timeout_ms: 45000
 
-  # 步骤 5：分析随机用户数据
+  # Step 5: Analyze user data
   - id: analyze_user
-    name: 分析随机用户数据
+    name: Analyze User Data
     llm:
       provider: ollama
       model: qwen3:8b
-      prompt: "请分析以下随机用户数据，提取用户的详细信息，包括姓名、性别、年龄、地址等，并生成一个简短的用户档案：\n{{steps.fetch_random_user.output}}"
+      prompt: "Please analyze the following random user data, extract detailed information including name, gender, age, address, etc., and generate a short user profile:\n{{steps.fetch_random_user.output}}"
       max_tokens: 50000
       temperature: 0.7
     depends_on:
       - fetch_random_user
     timeout_ms: 45000
 
-  # 步骤 6：分析猫的事实
+  # Step 6: Analyze cat fact
   - id: analyze_cat_fact
-    name: 分析猫的事实
+    name: Analyze Cat Fact
     llm:
       provider: ollama
       model: qwen3:8b
-      prompt: "请分析以下关于猫的事实，扩展并提供更多相关的有趣信息：\n{{steps.fetch_cat_fact.output}}"
+      prompt: "Please analyze the following cat fact, expand on it and provide more related interesting information:\n{{steps.fetch_cat_fact.output}}"
       max_tokens: 50000
       temperature: 0.7
     depends_on:
       - fetch_cat_fact
     timeout_ms: 45000
 
-  # 步骤 7：生成综合报告
+  # Step 7: Generate comprehensive report
   - id: generate_report
-    name: 生成综合报告
+    name: Generate Comprehensive Report
     llm:
       provider: ollama
       model: qwen3:8b
-      prompt: "基于以下三个分析结果，生成一份有趣的综合报告，包括数据解读、用户分析和关于猫的有趣事实：\n\n示例数据分析：\n{{steps.analyze_sample_data.output}}\n\n用户数据分析：\n{{steps.analyze_user.output}}\n\n猫的事实分析：\n{{steps.analyze_cat_fact.output}}"
+      prompt: "Based on the following three analysis results, generate an interesting comprehensive report including data interpretation, user analysis, and cat facts:\n\nSample Data Analysis:\n{{steps.analyze_sample_data.output}}\n\nUser Data Analysis:\n{{steps.analyze_user.output}}\n\nCat Fact Analysis:\n{{steps.analyze_cat_fact.output}}"
       max_tokens: 50000
       temperature: 0.5
     depends_on:
@@ -95,13 +95,13 @@ steps:
       - analyze_cat_fact
     timeout_ms: 60000
 
-  # 步骤 8：生成结构化数据
+  # Step 8: Generate structured data
   - id: generate_structured_data
-    name: 生成结构化数据
+    name: Generate Structured Data
     llm:
       provider: ollama
       model: qwen3:8b
-      prompt: "请将以下综合报告转换为结构化 JSON 格式，包含 sample_data（示例数据分析）、user（用户数据分析）、cat_fact（猫的事实分析）和 summary（总结）四个主要部分：\n{{steps.generate_report.output}}\n\n请只输出 JSON 格式，不要添加任何其他文本。"
+      prompt: "Please convert the following comprehensive report into structured JSON format, including four main sections: sample_data (sample data analysis), user (user data analysis), cat_fact (cat fact analysis), and summary (summary):\n{{steps.generate_report.output}}\n\nPlease output only JSON format, no additional text."
       max_tokens: 50000
       temperature: 0.3
     depends_on:

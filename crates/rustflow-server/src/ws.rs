@@ -1,27 +1,40 @@
 //! WebSocket streaming handler.
 //!
-//! Route: `GET /agents/{id}/stream`
+//! # Endpoints
+//!
+//! ## `GET /agents/{id}/stream`
+//!
+//! Start a new workflow execution and stream its events.
+//! If a run is already active for this agent, the client is attached as an
+//! observer instead (no duplicate execution is started).
+//!
+//! ## `GET /agents/{id}/observe`
+//!
+//! Attach to an existing run as a read-only observer.  Replays all events
+//! emitted so far, then streams live events until the workflow finishes.
+//! Returns `workflow_failed` immediately if no active run exists.
 //!
 //! # Protocol
 //!
 //! 1. Client connects (WebSocket upgrade).
-//! 2. Client sends a single JSON message (the "start" frame):
+//! 2. Client sends a single JSON "start" frame:
 //!    ```json
 //!    { "vars": { "key": "value" } }
 //!    ```
-//!    The `vars` field is optional; send `{}` to start with an empty context.
-//! 3. Server executes the agent workflow and streams event frames:
+//!    `vars` is used only by `/stream` when starting a new run; `/observe`
+//!    ignores it.
+//! 3. Server streams event frames:
 //!    ```json
-//!    {"type":"step_started",   "step_id":"…","step_name":"…"}
-//!    {"type":"step_succeeded", "step_id":"…","step_name":"…","elapsed_ms":820,"output":{…}}
-//!    {"type":"step_failed",    "step_id":"…","step_name":"…","error":"…","will_retry":true,"attempt":1,"elapsed_ms":12}
-//!    {"type":"step_retrying",  "step_id":"…","step_name":"…","attempt":2}
+//!    {"type":"step_started",    "step_id":"…","step_name":"…"}
+//!    {"type":"step_succeeded",  "step_id":"…","elapsed_ms":820,"output":{…}}
+//!    {"type":"step_failed",     "step_id":"…","error":"…","will_retry":true,"attempt":1,"elapsed_ms":12}
+//!    {"type":"step_retrying",   "step_id":"…","attempt":2}
 //!    {"type":"circuit_breaker_opened","resource":"ollama"}
 //!    {"type":"circuit_breaker_closed","resource":"ollama"}
 //!    {"type":"workflow_completed","outputs":{…}}
 //!    {"type":"workflow_failed","error":"…"}
 //!    ```
-//! 4. The server closes the connection after `workflow_completed` or
+//! 4. Server closes the connection after `workflow_completed` or
 //!    `workflow_failed`.
 
 use std::collections::HashMap;
@@ -31,16 +44,17 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{info, warn};
 
+use rustflow_core::agent::Agent;
 use rustflow_core::context::Context;
-use rustflow_core::types::Value;
+use rustflow_core::types::{AgentId, Value};
 use rustflow_orchestrator::{DefaultStepExecutor, Scheduler, SchedulerEvent};
 
 use crate::state::AppState;
 
-// ── WebSocket event shapes ────────────────────────────────────────────────────
+// ── WsEvent ───────────────────────────────────────────────────────────────────
 
 /// JSON frame sent from the server to a connected client.
 #[derive(Debug, Clone, Serialize)]
@@ -89,17 +103,14 @@ impl From<SchedulerEvent> for WsEvent {
             SchedulerEvent::StepStarted { step_id, step_name } => {
                 WsEvent::StepStarted { step_id, step_name }
             }
-            SchedulerEvent::StepSucceeded {
-                step_id,
-                step_name,
-                elapsed,
-                output,
-            } => WsEvent::StepSucceeded {
-                step_id,
-                step_name,
-                elapsed_ms: elapsed.as_millis() as u64,
-                output,
-            },
+            SchedulerEvent::StepSucceeded { step_id, step_name, elapsed, output } => {
+                WsEvent::StepSucceeded {
+                    step_id,
+                    step_name,
+                    elapsed_ms: elapsed.as_millis() as u64,
+                    output,
+                }
+            }
             SchedulerEvent::StepFailed {
                 step_id,
                 step_name,
@@ -115,15 +126,9 @@ impl From<SchedulerEvent> for WsEvent {
                 attempt,
                 elapsed_ms: elapsed.as_millis() as u64,
             },
-            SchedulerEvent::StepRetrying {
-                step_id,
-                step_name,
-                attempt,
-            } => WsEvent::StepRetrying {
-                step_id,
-                step_name,
-                attempt,
-            },
+            SchedulerEvent::StepRetrying { step_id, step_name, attempt } => {
+                WsEvent::StepRetrying { step_id, step_name, attempt }
+            }
             SchedulerEvent::CircuitBreakerOpened { resource } => {
                 WsEvent::CircuitBreakerOpened { resource }
             }
@@ -134,56 +139,67 @@ impl From<SchedulerEvent> for WsEvent {
     }
 }
 
-// ── Client → server message ───────────────────────────────────────────────────
+// ── StartMessage ──────────────────────────────────────────────────────────────
 
 /// The single JSON message the client sends before execution begins.
 #[derive(Debug, Deserialize, Default)]
 pub struct StartMessage {
-    /// Input variables to inject into the execution context.
+    /// Input variables (used only when starting a new run).
     #[serde(default)]
     pub vars: HashMap<String, serde_json::Value>,
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+// ── Handlers ──────────────────────────────────────────────────────────────────
 
-/// `GET /agents/{id}/stream` — upgrade to WebSocket and stream execution events.
+/// `GET /agents/{id}/stream` — start or join a run and stream events.
 pub async fn stream_agent(
     State(state): State<AppState>,
     Path(id): Path<String>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state, id))
+    ws.on_upgrade(move |socket| async move {
+        if let Err(e) = run_socket(socket, state, id, false).await {
+            warn!("WebSocket (stream) error: {e}");
+        }
+    })
 }
 
-async fn handle_socket(socket: WebSocket, state: AppState, id: String) {
-    if let Err(e) = run_socket(socket, state, id).await {
-        warn!("WebSocket session error: {e}");
-    }
+/// `GET /agents/{id}/observe` — observe an existing run (read-only).
+pub async fn observe_agent(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| async move {
+        if let Err(e) = run_socket(socket, state, id, true).await {
+            warn!("WebSocket (observe) error: {e}");
+        }
+    })
 }
+
+// ── Core socket logic ─────────────────────────────────────────────────────────
 
 async fn run_socket(
     mut socket: WebSocket,
     state: AppState,
     id: String,
+    observe_only: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!(agent_id = %id, "WebSocket session started");
+    info!(agent_id = %id, observe_only, "WebSocket session started");
 
-    // ── 1. Read the start message from the client ─────────────────────────────
+    // 1. Read the start message (vars only matter for new runs).
     let start: StartMessage = match socket.recv().await {
         Some(Ok(Message::Text(text))) => serde_json::from_str(&text).unwrap_or_default(),
         Some(Ok(Message::Close(_))) | None => {
             info!(agent_id = %id, "client disconnected before sending start message");
             return Ok(());
         }
-        Some(Ok(_)) => {
-            // Binary / ping / pong — treat as empty start.
-            StartMessage::default()
-        }
+        Some(Ok(_)) => StartMessage::default(),
         Some(Err(e)) => return Err(e.into()),
     };
 
-    // ── 2. Look up the agent ──────────────────────────────────────────────────
-    let agent_id = rustflow_core::types::AgentId::new(&id);
+    // 2. Look up the agent.
+    let agent_id = AgentId::new(&id);
     let agent = match state.get_agent(&agent_id).await {
         Some(a) => a,
         None => {
@@ -195,80 +211,154 @@ async fn run_socket(
         }
     };
 
-    // ── 3. Set up execution context ───────────────────────────────────────────
+    // 3. Check for an existing run.
+    let has_run = state.observe_run(&id).await.is_some();
+
+    if !has_run {
+        if observe_only {
+            // Observe-only with no active run — tell the client.
+            let msg = serde_json::to_string(&WsEvent::WorkflowFailed {
+                error: format!("no active run for agent '{id}'"),
+            })?;
+            let _ = socket.send(Message::Text(msg.into())).await;
+            return Ok(());
+        }
+
+        // Start a new run in the background.
+        state.create_run(id.clone()).await;
+        let state_bg = state.clone();
+        let id_bg = id.clone();
+        let vars = start.vars;
+        tokio::spawn(async move {
+            run_workflow_bg(state_bg, id_bg, agent, vars).await;
+        });
+    }
+
+    // 4. Observe the run (works for both new and pre-existing runs).
+    //    `observe_run` is safe to call immediately after `create_run` because
+    //    the scheduler (spawned above) must acquire a write lock to emit its
+    //    first event, while we hold a read lock here — no race.
+    let (past, done, rx) = state.observe_run(&id).await.unwrap();
+    forward_to_socket(socket, past, done, rx).await?;
+
+    info!(agent_id = %id, "WebSocket session closed");
+    Ok(())
+}
+
+// ── Background executor ───────────────────────────────────────────────────────
+
+/// Run a workflow to completion, emitting all events into the shared run store.
+/// The task is completely independent of any WebSocket connection.
+async fn run_workflow_bg(
+    state: AppState,
+    id: String,
+    agent: Agent,
+    vars: HashMap<String, serde_json::Value>,
+) {
+    // Build context.
     let mut ctx = Context::for_agent(agent.id.clone());
-    for (key, value) in start.vars {
+    for (key, value) in vars {
         ctx.set_var(key, Value::from(value));
     }
 
-    let steps = agent.steps.clone();
+    // Bridge sync scheduler callbacks → async state via an mpsc channel.
+    let (tx, mut rx) = mpsc::unbounded_channel::<WsEvent>();
+
+    // Forward task: drains the mpsc and writes to the run store.
+    let state_fwd = state.clone();
+    let id_fwd = id.clone();
+    let fwd_task = tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            state_fwd.emit_run_event(&id_fwd, event).await;
+        }
+    });
+
     let executor = Arc::new(DefaultStepExecutor::new(
         Arc::clone(&state.llm_gateway),
         Arc::clone(&state.tool_registry),
     ));
     let scheduler = Scheduler::new(executor);
 
-    // ── 4. Bridge sync on_event → async WS sender via mpsc ───────────────────
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let result = scheduler
+        .run_with_events(&agent.steps, ctx, move |event| {
+            let _ = tx.send(WsEvent::from(event));
+        })
+        .await;
 
-    let tx_scheduler = tx.clone();
-    let scheduler_task = tokio::spawn(async move {
-        let result = scheduler
-            .run_with_events(&steps, ctx, move |event| {
-                if let Ok(msg) = serde_json::to_string(&WsEvent::from(event)) {
-                    let _ = tx_scheduler.send(msg);
-                }
-            })
-            .await;
+    // Wait for all mid-run events to be flushed before writing the terminal.
+    let _ = fwd_task.await;
 
-        // Send the terminal event.
-        let terminal = match result {
-            Ok(ctx) => {
-                let outputs: serde_json::Map<String, serde_json::Value> = ctx
-                    .step_outputs
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.inner().clone()))
-                    .collect();
-                WsEvent::WorkflowCompleted {
-                    outputs: serde_json::Value::Object(outputs),
-                }
-            }
-            Err(e) => WsEvent::WorkflowFailed {
-                error: e.to_string(),
-            },
-        };
-
-        if let Ok(msg) = serde_json::to_string(&terminal) {
-            let _ = tx.send(msg);
+    let terminal = match result {
+        Ok(ctx) => {
+            let outputs: serde_json::Map<String, serde_json::Value> = ctx
+                .step_outputs
+                .iter()
+                .map(|(k, v)| (k.clone(), v.inner().clone()))
+                .collect();
+            WsEvent::WorkflowCompleted { outputs: serde_json::Value::Object(outputs) }
         }
-    });
+        Err(e) => WsEvent::WorkflowFailed { error: e.to_string() },
+    };
 
-    // ── 5. Forward all messages to the WebSocket ──────────────────────────────
+    state.finish_run(&id, terminal).await;
+}
+
+// ── Event forwarding ──────────────────────────────────────────────────────────
+
+/// Replay past events to `socket`, then stream live ones until the workflow
+/// terminates or the client disconnects.
+async fn forward_to_socket(
+    mut socket: WebSocket,
+    past: Vec<WsEvent>,
+    done: bool,
+    mut rx: broadcast::Receiver<WsEvent>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Replay buffered events.
+    for event in &past {
+        let msg = serde_json::to_string(event)?;
+        if socket.send(Message::Text(msg.into())).await.is_err() {
+            return Ok(()); // client disconnected mid-replay
+        }
+    }
+
+    if done {
+        // All events (including terminal) already replayed.
+        let _ = socket.send(Message::Close(None)).await;
+        return Ok(());
+    }
+
+    // Stream live events.
     loop {
         tokio::select! {
-            // Receive a serialised event from the scheduler task.
-            msg = rx.recv() => {
-                match msg {
-                    Some(text) => {
-                        if socket.send(Message::Text(text.into())).await.is_err() {
-                            // Client disconnected — abort.
-                            scheduler_task.abort();
+            result = rx.recv() => {
+                match result {
+                    Ok(event) => {
+                        let is_terminal = matches!(
+                            event,
+                            WsEvent::WorkflowCompleted { .. } | WsEvent::WorkflowFailed { .. }
+                        );
+                        let msg = serde_json::to_string(&event)?;
+                        if socket.send(Message::Text(msg.into())).await.is_err() {
+                            break; // client disconnected — scheduler keeps running
+                        }
+                        if is_terminal {
+                            let _ = socket.send(Message::Close(None)).await;
                             break;
                         }
                     }
-                    None => {
-                        // Channel closed — scheduler finished.
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("Observer lagged by {n} messages — disconnecting");
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        // Sender dropped before terminal arrived — shouldn't happen normally.
                         break;
                     }
                 }
             }
-            // Handle incoming client frames (ping/close).
             client_msg = socket.recv() => {
                 match client_msg {
-                    Some(Ok(Message::Close(_))) | None => {
-                        scheduler_task.abort();
-                        break;
-                    }
+                    Some(Ok(Message::Close(_))) | None => break,
                     Some(Ok(Message::Ping(data))) => {
                         let _ = socket.send(Message::Pong(data)).await;
                     }
@@ -278,13 +368,6 @@ async fn run_socket(
         }
     }
 
-    // Drain remaining events (the channel might have buffered messages).
-    while let Ok(text) = rx.try_recv() {
-        let _ = socket.send(Message::Text(text.into())).await;
-    }
-
-    let _ = socket.send(Message::Close(None)).await;
-    info!(agent_id = %id, "WebSocket session closed");
     Ok(())
 }
 
