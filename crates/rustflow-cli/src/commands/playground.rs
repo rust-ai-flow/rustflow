@@ -1,6 +1,7 @@
 use anyhow;
 use clap::Args;
 use crossterm::style::Stylize;
+use std::path::PathBuf;
 use tokio::process::Command;
 
 /// Launch the web playground (starts the server and opens the browser).
@@ -19,10 +20,32 @@ pub struct PlaygroundArgs {
     pub no_open: bool,
 }
 
+/// Returns the playground directory: $RUSTFLOW_PLAYGROUND_DIR if set,
+/// otherwise ~/.rustflow/playground.
+fn playground_dir() -> anyhow::Result<PathBuf> {
+    if let Ok(dir) = std::env::var("RUSTFLOW_PLAYGROUND_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    let home = std::env::var("HOME")
+        .map_err(|_| anyhow::anyhow!("$HOME is not set"))?;
+    Ok(PathBuf::from(home).join(".rustflow").join("playground"))
+}
+
 pub async fn execute(args: PlaygroundArgs) -> anyhow::Result<()> {
     let addr = format!("{}:{}", args.host, args.port);
     let url = format!("http://{addr}");
     let frontend_url = "http://localhost:5173/playground/";
+
+    let pg_dir = playground_dir()?;
+
+    if !pg_dir.exists() {
+        eprintln!(
+            "Error: Playground not found at {}.\n\
+             Re-run the installer or set RUSTFLOW_PLAYGROUND_DIR to the playground source directory.",
+            pg_dir.display()
+        );
+        return Err(anyhow::anyhow!("playground directory not found: {}", pg_dir.display()));
+    }
 
     // Check if Node.js is installed
     if !is_command_available("node").await {
@@ -36,30 +59,32 @@ pub async fn execute(args: PlaygroundArgs) -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("pnpm not installed"));
     }
 
-    // Check if dependencies are installed
-    if !std::path::Path::new("apps/playground/node_modules").exists() {
+    // Install npm dependencies if needed
+    if !pg_dir.join("node_modules").exists() {
         eprintln!("Info: Dependencies not installed. Installing dependencies...");
         let status = Command::new("pnpm")
             .args(["install"])
-            .current_dir("apps/playground")
+            .current_dir(&pg_dir)
             .status()
             .await
-            .expect("Failed to install dependencies");
+            .map_err(|e| anyhow::anyhow!("Failed to run pnpm install: {e}"))?;
 
         if !status.success() {
             eprintln!(
-                "Error: Failed to install dependencies. Please run 'pnpm install' in the apps/playground directory manually."
+                "Error: Failed to install dependencies. Try running 'pnpm install' in {}",
+                pg_dir.display()
             );
-            return Err(anyhow::anyhow!("Failed to install dependencies"));
+            return Err(anyhow::anyhow!("pnpm install failed"));
         }
         eprintln!("Info: Dependencies installed successfully.");
     }
 
     // Start frontend development server in the background
+    let pg_dir_clone = pg_dir.clone();
     tokio::spawn(async move {
         let mut cmd = Command::new("pnpm")
             .args(["run", "dev"])
-            .current_dir("apps/playground")
+            .current_dir(&pg_dir_clone)
             .spawn()
             .expect("Failed to start frontend development server");
 

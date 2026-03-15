@@ -185,6 +185,15 @@ cp "$BUILT_BIN" "$INSTALL_PATH"
 chmod +x "$INSTALL_PATH"
 success "Installed: ${INSTALL_PATH}"
 
+# Copy playground source so `rustflow playground` works without the repo.
+PLAYGROUND_SRC="$SOURCE_DIR/apps/playground"
+PLAYGROUND_DEST="$PREFIX/playground"
+if [[ -d "$PLAYGROUND_SRC" ]]; then
+  rm -rf "$PLAYGROUND_DEST"
+  cp -r "$PLAYGROUND_SRC" "$PLAYGROUND_DEST"
+  success "Playground installed: ${PLAYGROUND_DEST}"
+fi
+
 # ── PATH setup ────────────────────────────────────────────────────────────────
 
 # Check whether BIN_DIR is already in PATH.
