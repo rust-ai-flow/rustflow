@@ -8,6 +8,7 @@ members = [
     "crates/rustflow-plugins",
     "crates/rustflow-server",
     "crates/rustflow-cli",
+    "benches",
 ]
 
 [workspace.package]
@@ -59,6 +60,9 @@ base64 = "0.22"
 # Utilities
 anyhow = "1"
 dotenvy = "0.15"
+
+# Benchmarking
+criterion = { version = "0.5", features = ["async_tokio"] }
 
 # WASM runtime
 wasmtime = "29"
