@@ -60,6 +60,13 @@ Python Agent 框架（LangChain、AutoGen）每个 Agent 占用 **100–300 MB**
 | Agent 反序列化 | ~2 µs | ~18 µs | ~180 µs |
 | `Context::set_step_output` × N | ~600 ns | ~5 µs | ~55 µs |
 
+### 堆内存占用 — 每 Agent 内存
+
+| 对象 | 每 Agent 堆内存 | 每步骤输出 |
+|---|---|---|
+| 1,000 Agent × 10 步 | **2.4 KB** | — |
+| Context 含 1,000 条输出 | — | **~468 B** |
+
 本地复现：
 
 ```bash
@@ -68,6 +75,13 @@ cargo bench -p rustflow-benches
 
 # 并发压测
 cargo test -p rustflow-benches --test concurrency --release -- --nocapture
+
+# 内存占用测试
+cargo test -p rustflow-benches --test memory --release -- --nocapture
+
+# 泄漏验证（需要串行执行）
+cargo test -p rustflow-benches --test memory --release -- \
+  --nocapture --test-threads=1 --include-ignored agent_heap_is_freed_after_drop
 ```
 
 ---

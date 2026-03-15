@@ -60,6 +60,13 @@ Results measured on release builds (`cargo bench` / `cargo test --release`), App
 | Agent deserialize | ~2 µs | ~18 µs | ~180 µs |
 | `Context::set_step_output` × N | ~600 ns | ~5 µs | ~55 µs |
 
+### Heap footprint — per-agent memory
+
+| Objects | Heap / agent | Heap / step output |
+|---|---|---|
+| 1,000 agents × 10 steps | **2.4 KB** | — |
+| Context with 1,000 outputs | — | **~468 B** |
+
 Reproduce locally:
 
 ```bash
@@ -68,6 +75,13 @@ cargo bench -p rustflow-benches
 
 # Concurrency stress tests
 cargo test -p rustflow-benches --test concurrency --release -- --nocapture
+
+# Memory footprint tests
+cargo test -p rustflow-benches --test memory --release -- --nocapture
+
+# Leak verification (requires serial execution)
+cargo test -p rustflow-benches --test memory --release -- \
+  --nocapture --test-threads=1 --include-ignored agent_heap_is_freed_after_drop
 ```
 
 ---
