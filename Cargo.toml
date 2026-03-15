@@ -60,6 +60,9 @@ base64 = "0.22"
 anyhow = "1"
 dotenvy = "0.15"
 
+# Benchmarking
+criterion = { version = "0.5", features = ["async_tokio"] }
+
 # WASM runtime
 wasmtime = "29"
 
