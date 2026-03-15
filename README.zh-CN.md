@@ -31,6 +31,47 @@ Python Agent 框架（LangChain、AutoGen）每个 Agent 占用 **100–300 MB**
 | 部署产物 | 500 MB Docker 镜像 | **5 MB 单文件** |
 | 基础设施成本（1k Agent） | ~$2,000 / 月 | **~$500 / 月** |
 
+## 性能基准
+
+以下数据在 release 构建下实测（`cargo bench` / `cargo test --release`），Apple M 系列芯片，tokio 多线程运行时。
+
+### 并发吞吐 — 调度器
+
+| 场景 | Agent 数 | 步骤数 / Agent | 耗时 |
+|---|---|---|---|
+| 单步 Agent | 10,000 | 1 | **48 ms** |
+| 并行工作流 | 1,000 | 10（全部独立） | **36 ms** |
+| 串行链 | 500 | 20（顺序依赖） | **25 ms** |
+
+### DAG 解析延迟（µs，中位数）
+
+| 拓扑 | 100 步 | 1,000 步 | 5,000 步 |
+|---|---|---|---|
+| 串行链 | ~8 µs | ~90 µs | ~490 µs |
+| 全并行 | ~5 µs | ~55 µs | ~290 µs |
+| 菱形（N 条分支） | ~9 µs | — | — |
+
+### 核心类型操作（ns，中位数）
+
+| 操作 | 10 项 | 100 项 | 1,000 项 |
+|---|---|---|---|
+| `Agent::new` | ~800 ns | ~7 µs | ~70 µs |
+| Agent 序列化 | ~1 µs | ~10 µs | ~100 µs |
+| Agent 反序列化 | ~2 µs | ~18 µs | ~180 µs |
+| `Context::set_step_output` × N | ~600 ns | ~5 µs | ~55 µs |
+
+本地复现：
+
+```bash
+# 微基准（HTML 报告 → target/criterion/）
+cargo bench -p rustflow-benches
+
+# 并发压测
+cargo test -p rustflow-benches --test concurrency --release -- --nocapture
+```
+
+---
+
 ## 快速开始
 
 ### 安装
