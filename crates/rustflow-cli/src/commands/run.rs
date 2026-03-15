@@ -38,6 +38,16 @@ pub struct RunArgs {
 }
 
 pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
+    // --watch: delegate to the dev watcher.
+    if args.watch {
+        return super::dev::execute(super::dev::DevArgs {
+            file: args.file,
+            vars: args.vars,
+            interval_ms: 500,
+        })
+        .await;
+    }
+
     println!(
         "{}  Loading workflow: {}",
         "▶".cyan(),

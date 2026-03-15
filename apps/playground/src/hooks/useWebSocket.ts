@@ -1,5 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
-import type { RunStatus, StepState, SystemMessage, WsEvent } from '../types';
+import type { WsEvent } from 'rustflow';
+import { client } from '../lib/client';
+import type { RunStatus, StepState, SystemMessage } from '../types';
 
 interface UseWebSocketOptions {
   onCompleted?: (outputs: Record<string, unknown>) => void;
@@ -17,7 +19,8 @@ interface UseWebSocketReturn {
 }
 
 export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketReturn {
-  const wsRef = useRef<WebSocket | null>(null);
+  // Ref to the current stream generator so we can cancel it on disconnect.
+  const generatorRef = useRef<AsyncGenerator<WsEvent> | null>(null);
   const timerRefs = useRef<Record<string, number>>({});
   const startTimesRef = useRef<Record<string, number>>({});
 
@@ -39,9 +42,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     startTimesRef.current[stepId] = Date.now();
     const tid = window.setInterval(() => {
       const elapsed = Date.now() - (startTimesRef.current[stepId] ?? Date.now());
-      setSteps(prev =>
-        prev.map(s => s.id === stepId ? { ...s, elapsed_ms: elapsed } : s)
-      );
+      setSteps(prev => prev.map(s => s.id === stepId ? { ...s, elapsed_ms: elapsed } : s));
     }, 100);
     timerRefs.current[stepId] = tid;
   }, [stopTimer]);
@@ -53,17 +54,10 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
           const existing = prev.find(s => s.id === event.step_id);
           if (existing) {
             return prev.map(s =>
-              s.id === event.step_id
-                ? { ...s, status: 'running', startedAt: Date.now() }
-                : s
+              s.id === event.step_id ? { ...s, status: 'running', startedAt: Date.now() } : s
             );
           }
-          return [...prev, {
-            id: event.step_id,
-            name: event.step_name,
-            status: 'running',
-            startedAt: Date.now(),
-          }];
+          return [...prev, { id: event.step_id, name: event.step_name, status: 'running', startedAt: Date.now() }];
         });
         startTimer(event.step_id);
         break;
@@ -92,9 +86,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
         } else {
           setSteps(prev =>
             prev.map(s =>
-              s.id === event.step_id
-                ? { ...s, status: 'retrying', attempt: event.attempt }
-                : s
+              s.id === event.step_id ? { ...s, status: 'retrying', attempt: event.attempt } : s
             )
           );
         }
@@ -103,9 +95,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
       case 'step_retrying':
         setSteps(prev =>
           prev.map(s =>
-            s.id === event.step_id
-              ? { ...s, status: 'retrying', attempt: event.attempt }
-              : s
+            s.id === event.step_id ? { ...s, status: 'retrying', attempt: event.attempt } : s
           )
         );
         break;
@@ -126,58 +116,57 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
         }]);
         break;
 
-      case 'workflow_completed':
-        setRunStatus('completed');
-        setOutputs(event.outputs);
-        options.onCompleted?.(event.outputs);
-        break;
-
-      case 'workflow_failed':
-        setRunStatus('failed');
-        options.onFailed?.(event.error);
-        break;
+      // Terminal events (workflow_completed / workflow_failed) are only handled as generator return values
+      // They should not be yielded as regular events
     }
-  }, [startTimer, stopTimer, options]);
+  }, [startTimer, stopTimer]);
+
+  const disconnect = useCallback(() => {
+    if (generatorRef.current) {
+      void generatorRef.current.return(undefined);
+      generatorRef.current = null;
+    }
+    Object.keys(timerRefs.current).forEach(stopTimer);
+  }, [stopTimer]);
 
   const connect = useCallback((agentId: string, vars: Record<string, unknown>) => {
     disconnect();
+    setRunStatus('running');
 
-    const wsProtocol = 'ws:';
-    const wsUrl = `${wsProtocol}//localhost:8080/agents/${agentId}/stream`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    // client.stream() returns an AsyncGenerator<WsEvent, WorkflowCompletedEvent | WorkflowFailedEvent>.
+    // Terminal events (workflow_completed / workflow_failed) are the generator's return value,
+    // not yielded iterations, so we use the manual .next() loop to handle both.
+    const gen = client.stream(agentId, { vars });
+    generatorRef.current = gen;
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ vars }));
-    };
-
-    ws.onmessage = (evt) => {
+    const run = async () => {
       try {
-        const event: WsEvent = JSON.parse(evt.data as string);
-        handleEvent(event);
-      } catch (e) {
-        console.warn('Failed to parse WS event', e);
+        let result = await gen.next();
+        while (!result.done) {
+          handleEvent(result.value);
+          result = await gen.next();
+        }
+        // Terminal event (workflow_completed or workflow_failed)
+        if (result.value) {
+          if (result.value.type === 'workflow_completed') {
+            setRunStatus('completed');
+            setOutputs(result.value.outputs);
+            options.onCompleted?.(result.value.outputs);
+          } else if (result.value.type === 'workflow_failed') {
+            setRunStatus('failed');
+            options.onFailed?.(result.value.error);
+          }
+        }
+      } catch (e: unknown) {
+        // Generator was cancelled via .return() — ignore.
+        if (generatorRef.current === null) return;
+        setRunStatus('failed');
+        options.onFailed?.(e instanceof Error ? e.message : String(e));
       }
     };
 
-    ws.onerror = () => {
-      setRunStatus('failed');
-      options.onFailed?.('WebSocket connection error');
-    };
-
-    ws.onclose = () => {
-      wsRef.current = null;
-    };
-  }, [handleEvent, options]);
-
-  const disconnect = useCallback(() => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    // Stop all timers
-    Object.keys(timerRefs.current).forEach(stopTimer);
-  }, [stopTimer]);
+    void run();
+  }, [disconnect, handleEvent, options]);
 
   const reset = useCallback(() => {
     disconnect();
