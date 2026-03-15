@@ -8,6 +8,7 @@ members = [
     "crates/rustflow-plugins",
     "crates/rustflow-server",
     "crates/rustflow-cli",
+    "benches",
 ]
 
 [workspace.package]

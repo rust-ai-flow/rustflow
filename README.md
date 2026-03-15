@@ -31,6 +31,47 @@ Python-based agent frameworks (LangChain, AutoGen) consume **100–300 MB per ag
 | Deployment | 500 MB Docker image | **5 MB single binary** |
 | Infrastructure cost (1k agents) | ~$2,000 / mo | **~$500 / mo** |
 
+## Benchmarks
+
+Results measured on release builds (`cargo bench` / `cargo test --release`), Apple M-series, tokio multi-thread runtime.
+
+### Concurrency — scheduler throughput
+
+| Scenario | Agents | Steps / agent | Wall time |
+|---|---|---|---|
+| Single-step agents | 10,000 | 1 | **48 ms** |
+| Parallel workflow | 1,000 | 10 (all independent) | **36 ms** |
+| Linear chain | 500 | 20 (sequential) | **25 ms** |
+
+### DAG parse latency (µs, median)
+
+| Topology | 100 steps | 1,000 steps | 5,000 steps |
+|---|---|---|---|
+| Linear chain | ~8 µs | ~90 µs | ~490 µs |
+| Fully parallel | ~5 µs | ~55 µs | ~290 µs |
+| Diamond (N branches) | ~9 µs | — | — |
+
+### Core type operations (ns, median)
+
+| Operation | 10 items | 100 items | 1,000 items |
+|---|---|---|---|
+| `Agent::new` | ~800 ns | ~7 µs | ~70 µs |
+| Agent serialize | ~1 µs | ~10 µs | ~100 µs |
+| Agent deserialize | ~2 µs | ~18 µs | ~180 µs |
+| `Context::set_step_output` × N | ~600 ns | ~5 µs | ~55 µs |
+
+Reproduce locally:
+
+```bash
+# Micro-benchmarks (HTML report → target/criterion/)
+cargo bench -p rustflow-benches
+
+# Concurrency stress tests
+cargo test -p rustflow-benches --test concurrency --release -- --nocapture
+```
+
+---
+
 ## Quick Start
 
 ### Install

@@ -18,15 +18,3 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 
-[dev-dependencies]
-criterion = { workspace = true }
-tokio = { workspace = true }
-async-trait = { workspace = true }
-
-[[bench]]
-name = "dag"
-harness = false
-
-[[bench]]
-name = "scheduler"
-harness = false

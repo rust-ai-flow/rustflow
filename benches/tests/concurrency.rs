@@ -4,7 +4,7 @@
 /// concurrent workflow executions — the project's key performance claim.
 ///
 /// Run with:
-///   cargo test -p rustflow-orchestrator --test concurrency --release -- --nocapture
+///   cargo test -p rustflow-benches --test concurrency --release -- --nocapture
 use async_trait::async_trait;
 use rustflow_core::{context::Context, step::Step, types::{StepId, Value}};
 use rustflow_orchestrator::scheduler::{Scheduler, StepExecutor};
@@ -38,8 +38,6 @@ fn linear_steps(n: usize) -> Vec<Step> {
         .collect()
 }
 
-/// Spawns `agent_count` schedulers concurrently, each executing a small
-/// parallel workflow. Asserts they all complete without error.
 async fn run_concurrent_agents(agent_count: usize, steps_per_agent: usize) -> std::time::Duration {
     let scheduler = Arc::new(Scheduler::new(Arc::new(NoopExecutor)));
     let steps = Arc::new(parallel_steps(steps_per_agent));
@@ -67,7 +65,6 @@ async fn run_concurrent_agents(agent_count: usize, steps_per_agent: usize) -> st
 async fn concurrent_1000_agents_parallel_workflow() {
     let elapsed = run_concurrent_agents(1_000, 10).await;
     println!("1,000 agents (10 parallel steps each): {elapsed:?}");
-    // Sanity bound: should complete well within 30 seconds even in debug builds.
     assert!(elapsed.as_secs() < 30, "took too long: {elapsed:?}");
 }
 
@@ -129,7 +126,6 @@ async fn concurrent_outputs_are_correct() {
             let steps = Arc::clone(&steps);
             tokio::spawn(async move {
                 let ctx = sched.run(&steps, Context::new()).await.unwrap();
-                // Every step output must be present.
                 for i in 0..5 {
                     let key = StepId::new(format!("s{i}"));
                     assert!(ctx.get_step_output(&key).is_some(), "missing output for s{i}");

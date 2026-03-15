@@ -28,17 +28,14 @@ fn parallel_steps(n: usize) -> Vec<Step> {
 fn diamond_steps(n: usize) -> Vec<Step> {
     let mut steps = Vec::with_capacity(n + 2);
 
-    // root
     steps.push(Step::new_tool("root", "root", "noop", serde_json::Value::Null));
 
-    // N parallel branches, each depending on root
     for i in 0..n {
         let mut s = Step::new_tool(format!("b{i}"), format!("b{i}"), "noop", serde_json::Value::Null);
         s.depends_on = vec![StepId::new("root")];
         steps.push(s);
     }
 
-    // sink depends on all branches
     let mut sink = Step::new_tool("sink", "sink", "noop", serde_json::Value::Null);
     sink.depends_on = (0..n).map(|i| StepId::new(format!("b{i}"))).collect();
     steps.push(sink);

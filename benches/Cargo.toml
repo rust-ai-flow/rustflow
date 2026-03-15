@@ -1,0 +1,30 @@
+[package]
+name = "rustflow-benches"
+description = "Criterion benchmarks and concurrency stress tests for RustFlow"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dev-dependencies]
+criterion = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+rustflow-core = { workspace = true }
+rustflow-orchestrator = { workspace = true }
+serde_json = { workspace = true }
+
+[[bench]]
+name = "core"
+path = "core.rs"
+harness = false
+
+[[bench]]
+name = "dag"
+path = "dag.rs"
+harness = false
+
+[[bench]]
+name = "scheduler"
+path = "scheduler.rs"
+harness = false
