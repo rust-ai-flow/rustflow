@@ -15,10 +15,18 @@ function StatusBadge({ status }: { status: RunStatus }) {
     running: 'bg-orange-100 text-orange-600',
     completed: 'bg-green-100 text-green-700',
     failed: 'bg-red-100 text-red-600',
+    interrupted: 'bg-slate-100 text-slate-500',
+  };
+  const labels: Record<RunStatus, string> = {
+    idle: 'idle',
+    running: 'running',
+    completed: 'completed',
+    failed: 'failed',
+    interrupted: 'interrupted',
   };
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles[status]}`}>
-      {status}
+      {labels[status]}
     </span>
   );
 }
@@ -70,7 +78,7 @@ export function ExecutionPanel({ runStatus, steps, systemMessages, outputs }: Ex
           <>
             <div className="flex flex-col gap-2">
               {steps.map(step => (
-                <StepCard key={step.id} step={step} />
+                <StepCard key={step.id} step={step} frozen={runStatus === 'interrupted'} />
               ))}
             </div>
 

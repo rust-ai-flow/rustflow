@@ -3,6 +3,7 @@ import type { StepState } from '../types';
 
 interface StepCardProps {
   step: StepState;
+  frozen?: boolean;
 }
 
 function formatMs(ms: number): string {
@@ -19,7 +20,20 @@ function SpinnerIcon({ color }: { color: string }) {
   );
 }
 
-function StatusIcon({ status }: { status: StepState['status'] }) {
+function PausedIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <circle cx="8" cy="8" r="7" stroke="#CBD5E1" strokeWidth="1.5" />
+      <rect x="5.5" y="5" width="2" height="6" rx="0.5" fill="#94A3B8" />
+      <rect x="8.5" y="5" width="2" height="6" rx="0.5" fill="#94A3B8" />
+    </svg>
+  );
+}
+
+function StatusIcon({ status, frozen }: { status: StepState['status']; frozen?: boolean }) {
+  if (frozen && (status === 'running' || status === 'retrying')) {
+    return <PausedIcon />;
+  }
   switch (status) {
     case 'running':
       return <SpinnerIcon color="#F97316" />;
@@ -73,9 +87,9 @@ function borderColor(status: StepState['status']): string {
   }
 }
 
-export function StepCard({ step }: StepCardProps) {
+export function StepCard({ step, frozen }: StepCardProps) {
   const elapsed = step.elapsed_ms != null ? formatMs(step.elapsed_ms) : '';
-  const isLive = step.status === 'running' || step.status === 'retrying';
+  const isLive = !frozen && (step.status === 'running' || step.status === 'retrying');
 
   return (
     <div
@@ -84,7 +98,7 @@ export function StepCard({ step }: StepCardProps) {
     >
       <div className="flex items-start gap-2.5">
         <div className="mt-0.5 shrink-0">
-          <StatusIcon status={step.status} />
+          <StatusIcon status={step.status} frozen={frozen} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">

@@ -1,16 +1,44 @@
 {
   "name": "rustflow",
-  "version": "1.0.1",
-  "description": "High-performance AI Agent orchestration runtime — redefining agent infrastructure with Rust.",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "version": "2.0.3",
+  "description": "TypeScript SDK for the RustFlow AI Agent orchestration runtime",
+  "author": "RustFlow Contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rust-ai-flow/rustflow",
+    "directory": "sdks/typescript"
   },
   "keywords": [
-    "rust",
+    "rustflow",
     "ai",
-    "agent"
+    "agent",
+    "orchestration",
+    "llm"
   ],
-  "author": "73",
-  "license": "ISC"
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "dev": "tsc --project tsconfig.build.json --watch",
+    "test": "jest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@jest/globals": "^29.7.0",
+    "@types/node": "^22.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.7.0"
+  }
 }

@@ -62,3 +62,4 @@ criterion/
 
 apps/playground/node_modules
 apps/playground/dist
+apps/playground/.vite
