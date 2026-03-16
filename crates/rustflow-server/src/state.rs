@@ -4,7 +4,7 @@ use tokio::sync::{RwLock, broadcast};
 
 use rustflow_core::agent::Agent;
 use rustflow_core::types::AgentId;
-use rustflow_llm::{LlmGateway, providers::ollama::OllamaProvider};
+use rustflow_llm::{LlmGateway, providers::glm::GlmProvider, providers::ollama::OllamaProvider};
 use rustflow_tools::{
     EnvTool, FileReadTool, FileWriteTool, HttpTool, JsonExtractTool, ShellTool, SleepTool,
     ToolRegistry,
@@ -52,6 +52,7 @@ impl AppState {
 
         let mut llm_gateway = LlmGateway::new();
         llm_gateway.register(OllamaProvider::new());
+        llm_gateway.register(GlmProvider::from_env());
 
         Self {
             agents: Arc::new(RwLock::new(HashMap::new())),
@@ -98,7 +99,11 @@ impl AppState {
     /// Must be called before the scheduler starts emitting events.
     pub async fn create_run(&self, agent_id: String) {
         let (tx, _) = broadcast::channel(RUN_BROADCAST_CAPACITY);
-        let record = RunRecord { events: vec![], sender: tx, done: false };
+        let record = RunRecord {
+            events: vec![],
+            sender: tx,
+            done: false,
+        };
         self.runs.write().await.insert(agent_id, record);
     }
 
@@ -109,7 +114,11 @@ impl AppState {
     pub async fn observe_run(
         &self,
         agent_id: &str,
-    ) -> Option<(Vec<crate::ws::WsEvent>, bool, broadcast::Receiver<crate::ws::WsEvent>)> {
+    ) -> Option<(
+        Vec<crate::ws::WsEvent>,
+        bool,
+        broadcast::Receiver<crate::ws::WsEvent>,
+    )> {
         let store = self.runs.read().await;
         let record = store.get(agent_id)?;
         let events = record.events.clone();
