@@ -73,6 +73,7 @@ pub enum SchedulerEvent {
 struct StepStatus {
     state: StepState,
     attempts: u32,
+    last_error: Option<String>,
 }
 
 /// Returns the circuit-breaker resource key for a step:
@@ -167,14 +168,20 @@ impl Scheduler {
                 let failed_any = sg.values().any(|s| s.state == StepState::Failed);
 
                 if failed_any {
-                    let failed_id = sg
+                    let (failed_id, reason) = sg
                         .iter()
                         .find(|(_, s)| s.state == StepState::Failed)
-                        .map(|(id, _)| id.clone())
+                        .map(|(id, s)| {
+                            let reason = s
+                                .last_error
+                                .clone()
+                                .unwrap_or_else(|| "step failed after all retries".to_string());
+                            (id.clone(), reason)
+                        })
                         .unwrap_or_default();
                     return Err(OrchestratorError::StepFailed {
                         step_id: failed_id,
-                        reason: "step failed after all retries".to_string(),
+                        reason,
                     });
                 }
 
@@ -316,6 +323,7 @@ impl Scheduler {
                         let mut sg = statuses.lock().await;
                         let status = sg.get_mut(&step_id).unwrap();
                         status.attempts += 1;
+                        status.last_error = Some(err_msg.clone());
                         let attempt = status.attempts;
                         let retry = status.attempts <= step.retry_policy.max_retries();
                         let delay = if retry {

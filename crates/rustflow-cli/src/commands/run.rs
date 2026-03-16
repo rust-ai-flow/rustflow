@@ -11,6 +11,7 @@ use rustflow_core::types::Value;
 use rustflow_core::workflow::WorkflowDef;
 use rustflow_llm::LlmGateway;
 use rustflow_llm::providers::anthropic::AnthropicProvider;
+use rustflow_llm::providers::glm::GlmProvider;
 use rustflow_llm::providers::ollama::OllamaProvider;
 use rustflow_llm::providers::openai::OpenAiProvider;
 use rustflow_orchestrator::{DefaultStepExecutor, Scheduler, SchedulerEvent};
@@ -75,6 +76,10 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
     if std::env::var("ANTHROPIC_API_KEY").is_ok() {
         gateway.register(AnthropicProvider::from_env());
         info!("registered Anthropic provider");
+    }
+    if std::env::var("GLM_API_KEY").is_ok() {
+        gateway.register(GlmProvider::from_env());
+        info!("registered GLM provider");
     }
     // Ollama is always available (local, no API key needed).
     gateway.register(OllamaProvider::default());
@@ -221,9 +226,9 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
                 }
             }
         }
-        Err(e) => {
-            println!("{}  Workflow failed: {e}\n", "✗".red().bold());
-            return Err(anyhow::anyhow!("execution failed: {e}"));
+        Err(_) => {
+            // Details already printed by render_final's "Failure Details" section.
+            return Err(anyhow::anyhow!(""));
         }
     }
 

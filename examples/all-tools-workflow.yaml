@@ -64,10 +64,10 @@ steps:
   - id: analyze_data
     name: Analyze Data
     llm:
-      provider: ollama
-      model: qwen3:8b
+      provider: glm
+      model: glm-4.5-air
       prompt: "Please analyze the following JSON data, extract key information and generate a concise summary:\n{{steps.read_file.output}}"
-      max_tokens: 500
+      max_tokens: 1000
       temperature: 0.3
     depends_on:
       - read_file
