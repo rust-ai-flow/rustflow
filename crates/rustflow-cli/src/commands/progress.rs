@@ -23,6 +23,7 @@ struct StepDisplay {
     state: StepState,
     start_time: Option<Instant>,
     elapsed: Option<Duration>,
+    error: Option<String>,
 }
 
 /// Manages in-place terminal rendering of workflow progress.
@@ -69,6 +70,7 @@ impl LiveProgress {
                     state: StepState::Pending,
                     start_time: None,
                     elapsed: None,
+                    error: None,
                 },
             );
         }
@@ -120,6 +122,7 @@ impl LiveProgress {
             }
             SchedulerEvent::StepFailed {
                 step_id,
+                error,
                 will_retry,
                 elapsed,
                 ..
@@ -132,6 +135,7 @@ impl LiveProgress {
                     };
                     if !will_retry {
                         sd.elapsed = Some(*elapsed);
+                        sd.error = Some(error.clone());
                     }
                 }
             }
@@ -297,6 +301,34 @@ impl LiveProgress {
             )
             .ok();
             writeln!(stdout).ok();
+        }
+
+        // Failed step errors — printed after the fixed layout so line-counting is unaffected.
+        let failed: Vec<(&str, &str)> = self
+            .layers
+            .iter()
+            .flat_map(|l| l.step_ids.iter())
+            .filter_map(|id| {
+                self.steps.get(id).and_then(|sd| {
+                    if sd.state == StepState::Failed {
+                        sd.error.as_deref().map(|e| (sd.name.as_str(), e))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+
+        if !failed.is_empty() {
+            writeln!(stdout, "  {}", "── Failure Details ──".red().bold()).ok();
+            for (name, error) in &failed {
+                writeln!(stdout, "  {} {}", "✗".red(), name.red().bold()).ok();
+                // Indent each line of the error message.
+                for line in error.lines() {
+                    writeln!(stdout, "    {}", line.red()).ok();
+                }
+                writeln!(stdout).ok();
+            }
         }
 
         stdout.flush().ok();

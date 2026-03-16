@@ -84,7 +84,10 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("Error: {e}");
+        let msg = e.to_string();
+        if !msg.is_empty() {
+            eprintln!("Error: {msg}");
+        }
         std::process::exit(1);
     }
 }

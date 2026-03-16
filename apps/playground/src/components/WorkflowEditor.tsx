@@ -27,8 +27,8 @@ steps:
   - id: summarize
     name: Summarize Results
     llm:
-      provider: ollama
-      model: qwen3:8b
+      provider: glm
+      model: glm-4.5-air
       prompt: |
         Here is a Wikipedia extract about the Rust programming language:
 
@@ -47,8 +47,8 @@ steps:
   - id: format
     name: Format Report
     llm:
-      provider: ollama
-      model: qwen3:8b
+      provider: glm
+      model: glm-4.5-air
       prompt: |
         Convert the following summary into a Markdown report with:
         - A top-level heading
@@ -132,8 +132,8 @@ steps:
   - id: analyze_sample_data
     name: Analyze Sample Data
     llm:
-      provider: ollama
-      model: qwen3:8b
+      provider: glm
+      model: glm-4.5-air
       prompt: "Please analyze the following JSON data, extract key information and provide a detailed interpretation:\n{{steps.fetch_sample_data.output}}"
       max_tokens: 50000
       temperature: 0.7
@@ -145,8 +145,8 @@ steps:
   - id: analyze_user
     name: Analyze User Data
     llm:
-      provider: ollama
-      model: qwen3:8b
+      provider: glm
+      model: glm-4.5-air
       prompt: "Please analyze the following random user data, extract detailed information including name, gender, age, address, etc., and generate a short user profile:\n{{steps.fetch_random_user.output}}"
       max_tokens: 50000
       temperature: 0.7
@@ -158,8 +158,8 @@ steps:
   - id: analyze_cat_fact
     name: Analyze Cat Fact
     llm:
-      provider: ollama
-      model: qwen3:8b
+      provider: glm
+      model: glm-4.5-air
       prompt: "Please analyze the following cat fact, expand on it and provide more related interesting information:\n{{steps.fetch_cat_fact.output}}"
       max_tokens: 50000
       temperature: 0.7
@@ -171,8 +171,8 @@ steps:
   - id: generate_report
     name: Generate Comprehensive Report
     llm:
-      provider: ollama
-      model: qwen3:8b
+      provider: glm
+      model: glm-4.5-air
       prompt: "Based on the following three analysis results, generate an interesting comprehensive report including data interpretation, user analysis, and cat facts:\n\nSample Data Analysis:\n{{steps.analyze_sample_data.output}}\n\nUser Data Analysis:\n{{steps.analyze_user.output}}\n\nCat Fact Analysis:\n{{steps.analyze_cat_fact.output}}"
       max_tokens: 50000
       temperature: 0.5
@@ -186,8 +186,8 @@ steps:
   - id: generate_structured_data
     name: Generate Structured Data
     llm:
-      provider: ollama
-      model: qwen3:8b
+      provider: glm
+      model: glm-4.5-air
       prompt: "Please convert the following comprehensive report into structured JSON format, including four main sections: sample_data (sample data analysis), user (user data analysis), cat_fact (cat fact analysis), and summary (summary):\n{{steps.generate_report.output}}\n\nPlease output only JSON format, no additional text."
       max_tokens: 50000
       temperature: 0.3
@@ -260,8 +260,8 @@ steps:
   - id: analyze_data
     name: Analyze Data
     llm:
-      provider: ollama
-      model: qwen3:8b
+      provider: glm
+      model: glm-4.5-air
       prompt: "Please analyze the following JSON data, extract key information and generate a concise summary:\n{{steps.read_file.output}}"
       max_tokens: 500
       temperature: 0.3

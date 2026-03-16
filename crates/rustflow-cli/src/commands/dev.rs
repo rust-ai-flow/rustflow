@@ -11,6 +11,7 @@ use rustflow_core::context::Context;
 use rustflow_core::workflow::WorkflowDef;
 use rustflow_llm::LlmGateway;
 use rustflow_llm::providers::anthropic::AnthropicProvider;
+use rustflow_llm::providers::glm::GlmProvider;
 use rustflow_llm::providers::ollama::OllamaProvider;
 use rustflow_llm::providers::openai::OpenAiProvider;
 use rustflow_orchestrator::{DefaultStepExecutor, Scheduler, SchedulerEvent};
@@ -115,6 +116,10 @@ async fn run_workflow(file: &PathBuf, raw_vars: &[String]) {
     if std::env::var("ANTHROPIC_API_KEY").is_ok() {
         gateway.register(AnthropicProvider::from_env());
         info!("registered Anthropic provider");
+    }
+    if std::env::var("GLM_API_KEY").is_ok() {
+        gateway.register(GlmProvider::from_env());
+        info!("registered GLM provider");
     }
     gateway.register(OllamaProvider::default());
 

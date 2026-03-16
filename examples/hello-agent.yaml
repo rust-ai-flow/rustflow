@@ -23,8 +23,8 @@ steps:
   - id: summarize
     name: Summarize Results
     llm:
-      provider: ollama
-      model: qwen3:8b
+      provider: glm
+      model: glm-4.5-air
       prompt: |
         Here is a Wikipedia extract about the Rust programming language:
 
@@ -43,8 +43,8 @@ steps:
   - id: format
     name: Format Report
     llm:
-      provider: ollama
-      model: qwen3:8b
+      provider: glm
+      model: glm-4.5-air
       prompt: |
         Convert the following summary into a Markdown report with:
         - A top-level heading
