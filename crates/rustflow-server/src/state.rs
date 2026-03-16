@@ -52,7 +52,9 @@ impl AppState {
 
         let mut llm_gateway = LlmGateway::new();
         llm_gateway.register(OllamaProvider::new());
-        llm_gateway.register(GlmProvider::from_env());
+        if std::env::var("GLM_API_KEY").is_ok() {
+            llm_gateway.register(GlmProvider::from_env());
+        }
 
         Self {
             agents: Arc::new(RwLock::new(HashMap::new())),
