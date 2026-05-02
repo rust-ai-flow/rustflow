@@ -36,6 +36,10 @@ pub struct RunArgs {
     /// Watch for file changes and re-run automatically.
     #[arg(short, long)]
     pub watch: bool,
+
+    /// Allow workflow shell commands to execute.
+    #[arg(long)]
+    pub allow_shell: bool,
 }
 
 pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
@@ -45,15 +49,12 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
             file: args.file,
             vars: args.vars,
             interval_ms: 500,
+            allow_shell: args.allow_shell,
         })
         .await;
     }
 
-    println!(
-        "{}  Loading workflow: {}",
-        "▶".cyan(),
-        args.file.display()
-    );
+    println!("{}  Loading workflow: {}", "▶".cyan(), args.file.display());
 
     // 1. Parse the workflow YAML.
     let workflow = WorkflowDef::from_file(&args.file).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -88,7 +89,7 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
     // 3. Set up security policy and tool registry.
     let policy = Arc::new(SecurityPolicy {
         shell: rustflow_tools::security::ShellPolicy {
-            enabled: true,
+            enabled: args.allow_shell,
             ..Default::default()
         },
         ..Default::default()

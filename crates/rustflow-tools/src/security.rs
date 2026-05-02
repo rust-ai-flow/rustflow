@@ -98,7 +98,10 @@ impl FsPolicy {
         let path_str = absolute.to_string_lossy();
         for blocked in &self.blocked_paths {
             if path_str.contains(blocked) {
-                return Err(format!("path '{}' matches blocked pattern '{}'", raw_path, blocked));
+                return Err(format!(
+                    "path '{}' matches blocked pattern '{}'",
+                    raw_path, blocked
+                ));
             }
         }
 
@@ -120,39 +123,58 @@ impl FsPolicy {
                 .canonicalize()
                 .map_err(|e| format!("cannot canonicalize '{}': {e}", raw_path))?
         } else {
-            // For new files, canonicalize the parent directory.
-            let parent = absolute.parent().ok_or_else(|| {
-                format!("path '{}' has no parent directory", raw_path)
-            })?;
-            if parent.exists() {
-                let canonical_parent = parent
-                    .canonicalize()
-                    .map_err(|e| format!("cannot canonicalize parent of '{}': {e}", raw_path))?;
-                canonical_parent.join(absolute.file_name().unwrap_or_default())
-            } else {
-                // Parent doesn't exist yet — use the normalized absolute path.
-                absolute
+            // For new files, canonicalize the nearest existing ancestor so
+            // paths under symlinked directories like /tmp stay comparable to
+            // canonicalized allowed directories.
+            let mut ancestor = absolute.as_path();
+            let mut suffix = PathBuf::new();
+            loop {
+                if ancestor.exists() {
+                    let canonical_ancestor = ancestor.canonicalize().map_err(|e| {
+                        format!("cannot canonicalize ancestor of '{}': {e}", raw_path)
+                    })?;
+                    break canonical_ancestor.join(suffix);
+                }
+
+                let name = ancestor
+                    .file_name()
+                    .ok_or_else(|| format!("path '{}' has no existing ancestor", raw_path))?;
+                suffix = if suffix.as_os_str().is_empty() {
+                    PathBuf::from(name)
+                } else {
+                    PathBuf::from(name).join(suffix)
+                };
+                ancestor = ancestor
+                    .parent()
+                    .ok_or_else(|| format!("path '{}' has no parent directory", raw_path))?;
             }
         };
 
-        // Check allowed directories.
-        if !self.allowed_dirs.is_empty() {
-            let in_allowed = self.allowed_dirs.iter().any(|dir| {
-                let canonical_dir = if dir.exists() {
-                    dir.canonicalize().unwrap_or_else(|_| dir.clone())
-                } else {
-                    dir.clone()
-                };
-                resolved.starts_with(&canonical_dir)
-            });
+        // Check allowed directories. An empty allow-list means the current
+        // working directory, not unrestricted filesystem access.
+        let allowed_dirs = if self.allowed_dirs.is_empty() {
+            vec![
+                std::env::current_dir()
+                    .map_err(|e| format!("cannot determine working directory: {e}"))?,
+            ]
+        } else {
+            self.allowed_dirs.clone()
+        };
 
-            if !in_allowed {
-                return Err(format!(
-                    "path '{}' is outside allowed directories: {:?}",
-                    raw_path,
-                    self.allowed_dirs
-                ));
-            }
+        let in_allowed = allowed_dirs.iter().any(|dir| {
+            let canonical_dir = if dir.exists() {
+                dir.canonicalize().unwrap_or_else(|_| dir.clone())
+            } else {
+                dir.clone()
+            };
+            resolved.starts_with(&canonical_dir)
+        });
+
+        if !in_allowed {
+            return Err(format!(
+                "path '{}' is outside allowed directories: {:?}",
+                raw_path, allowed_dirs
+            ));
         }
 
         Ok(resolved)
@@ -239,7 +261,10 @@ impl ShellPolicy {
                 .and_then(|n| n.to_str())
                 .unwrap_or(first_word);
 
-            let allowed = self.allowed_commands.iter().any(|c| c == first_word || c == basename);
+            let allowed = self
+                .allowed_commands
+                .iter()
+                .any(|c| c == first_word || c == basename);
             if !allowed {
                 return Err(format!(
                     "command '{}' is not in the allowed command list: {:?}",
@@ -254,7 +279,9 @@ impl ShellPolicy {
     /// Check if an environment key should be filtered.
     pub fn is_env_key_filtered(&self, key: &str) -> bool {
         let upper = key.to_uppercase();
-        self.filtered_env_keys.iter().any(|k| k.to_uppercase() == upper)
+        self.filtered_env_keys
+            .iter()
+            .any(|k| k.to_uppercase() == upper)
     }
 
     /// Clamp timeout to the max allowed value.
@@ -356,6 +383,25 @@ mod tests {
             ..Default::default()
         };
         let result = policy.validate_path("/etc/hosts");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("outside allowed"));
+    }
+
+    #[test]
+    fn test_fs_empty_allowed_dirs_defaults_to_cwd() {
+        let policy = FsPolicy::default();
+        let cwd_file = std::env::current_dir()
+            .unwrap()
+            .join("rustflow_security_default_cwd_test.txt");
+        let result = policy.validate_path(cwd_file.to_str().unwrap());
+        assert!(result.is_ok());
+
+        let outside = if cfg!(target_os = "macos") {
+            "/private/tmp/rustflow_security_outside_cwd.txt"
+        } else {
+            "/tmp/rustflow_security_outside_cwd.txt"
+        };
+        let result = policy.validate_path(outside);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("outside allowed"));
     }

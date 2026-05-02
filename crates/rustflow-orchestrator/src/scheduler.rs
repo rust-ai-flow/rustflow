@@ -27,10 +27,7 @@ pub trait StepExecutor: Send + Sync + 'static {
 #[derive(Debug, Clone)]
 pub enum SchedulerEvent {
     /// A step has started executing.
-    StepStarted {
-        step_id: String,
-        step_name: String,
-    },
+    StepStarted { step_id: String, step_name: String },
     /// A step completed successfully.
     StepSucceeded {
         step_id: String,
@@ -57,15 +54,11 @@ pub enum SchedulerEvent {
     /// A circuit breaker transitioned from Closed/HalfOpen → Open.
     ///
     /// `resource` is the LLM provider name or tool name being protected.
-    CircuitBreakerOpened {
-        resource: String,
-    },
+    CircuitBreakerOpened { resource: String },
     /// A circuit breaker transitioned from HalfOpen → Closed.
     ///
     /// `resource` is the LLM provider name or tool name being protected.
-    CircuitBreakerClosed {
-        resource: String,
-    },
+    CircuitBreakerClosed { resource: String },
 }
 
 /// Tracks mutable per-step runtime state.
@@ -213,14 +206,11 @@ impl Scheduler {
                             resource: resource.clone(),
                         });
                         // Immediately mark the step as failed (no retry).
-                        statuses.lock().await.get_mut(&step_id).unwrap().state =
-                            StepState::Failed;
+                        statuses.lock().await.get_mut(&step_id).unwrap().state = StepState::Failed;
                         on_event(SchedulerEvent::StepFailed {
                             step_id: step_id.clone(),
                             step_name: step_clone.name.clone(),
-                            error: format!(
-                                "circuit breaker open for '{resource}'"
-                            ),
+                            error: format!("circuit breaker open for '{resource}'"),
                             will_retry: false,
                             attempt: 1,
                             elapsed: Duration::ZERO,
@@ -245,13 +235,26 @@ impl Scheduler {
                 });
 
                 let start = Instant::now();
-                step_starts
-                    .lock()
-                    .await
-                    .insert(sid.clone(), start);
+                step_starts.lock().await.insert(sid.clone(), start);
 
                 join_set.spawn(async move {
-                    let result = executor.execute(&step_clone, &ctx_clone).await;
+                    let result = if let Some(timeout_ms) = step_clone.timeout_ms {
+                        match tokio::time::timeout(
+                            Duration::from_millis(timeout_ms),
+                            executor.execute(&step_clone, &ctx_clone),
+                        )
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(_) => Err(OrchestratorError::StepTimeout {
+                                step_id: sid.clone(),
+                                timeout_ms,
+                            }
+                            .to_string()),
+                        }
+                    } else {
+                        executor.execute(&step_clone, &ctx_clone).await
+                    };
                     let elapsed = start.elapsed();
                     (sid, result, elapsed)
                 });
@@ -397,9 +400,10 @@ mod tests {
     #[async_trait]
     impl StepExecutor for SuccessExecutor {
         async fn execute(&self, step: &Step, _ctx: &Context) -> std::result::Result<Value, String> {
-            Ok(Value::from(
-                serde_json::json!(format!("{}-done", step.id.as_str())),
-            ))
+            Ok(Value::from(serde_json::json!(format!(
+                "{}-done",
+                step.id.as_str()
+            ))))
         }
     }
 
@@ -408,7 +412,11 @@ mod tests {
 
     #[async_trait]
     impl StepExecutor for FailExecutor {
-        async fn execute(&self, _step: &Step, _ctx: &Context) -> std::result::Result<Value, String> {
+        async fn execute(
+            &self,
+            _step: &Step,
+            _ctx: &Context,
+        ) -> std::result::Result<Value, String> {
             Err("boom".to_string())
         }
     }
@@ -428,9 +436,43 @@ mod tests {
         }
     }
 
+    /// A mock executor that times out N times then succeeds.
+    struct TimeoutThenSucceedExecutor {
+        timeout_count: AtomicU32,
+        timeout_until: u32,
+    }
+
+    impl TimeoutThenSucceedExecutor {
+        fn new(timeout_until: u32) -> Self {
+            Self {
+                timeout_count: AtomicU32::new(0),
+                timeout_until,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl StepExecutor for TimeoutThenSucceedExecutor {
+        async fn execute(
+            &self,
+            _step: &Step,
+            _ctx: &Context,
+        ) -> std::result::Result<Value, String> {
+            let count = self.timeout_count.fetch_add(1, Ordering::SeqCst);
+            if count < self.timeout_until {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Ok(Value::from(serde_json::json!("recovered")))
+        }
+    }
+
     #[async_trait]
     impl StepExecutor for FailThenSucceedExecutor {
-        async fn execute(&self, _step: &Step, _ctx: &Context) -> std::result::Result<Value, String> {
+        async fn execute(
+            &self,
+            _step: &Step,
+            _ctx: &Context,
+        ) -> std::result::Result<Value, String> {
             let count = self.fail_count.fetch_add(1, Ordering::SeqCst);
             if count < self.fail_until {
                 Err("transient error".to_string())
@@ -493,11 +535,12 @@ mod tests {
         let executor = FailThenSucceedExecutor::new(2); // fail twice, then succeed
         let scheduler = Scheduler::new(Arc::new(executor));
         let steps = vec![
-            Step::new_tool("a", "a", "noop", serde_json::Value::Null)
-                .with_retry(RetryPolicy::Fixed {
+            Step::new_tool("a", "a", "noop", serde_json::Value::Null).with_retry(
+                RetryPolicy::Fixed {
                     max_retries: 3,
                     interval_ms: 0,
-                }),
+                },
+            ),
         ];
         let ctx = scheduler.run(&steps, Context::new()).await.unwrap();
         let output = ctx.get_step_output(&StepId::new("a")).unwrap();
@@ -509,23 +552,57 @@ mod tests {
         let executor = FailThenSucceedExecutor::new(10); // always fail within 2 retries
         let scheduler = Scheduler::new(Arc::new(executor));
         let steps = vec![
-            Step::new_tool("a", "a", "noop", serde_json::Value::Null)
-                .with_retry(RetryPolicy::Fixed {
+            Step::new_tool("a", "a", "noop", serde_json::Value::Null).with_retry(
+                RetryPolicy::Fixed {
                     max_retries: 2,
                     interval_ms: 0,
-                }),
+                },
+            ),
         ];
         let err = scheduler.run(&steps, Context::new()).await.unwrap_err();
         assert!(matches!(err, OrchestratorError::StepFailed { .. }));
     }
 
     #[tokio::test]
+    async fn test_scheduler_timeout_is_retried() {
+        let executor = TimeoutThenSucceedExecutor::new(1);
+        let scheduler = Scheduler::new(Arc::new(executor));
+        let steps = vec![
+            Step::new_tool("a", "a", "noop", serde_json::Value::Null)
+                .with_timeout_ms(5)
+                .with_retry(RetryPolicy::Fixed {
+                    max_retries: 1,
+                    interval_ms: 0,
+                }),
+        ];
+
+        let mut events = Vec::new();
+        let ctx = scheduler
+            .run_with_events(&steps, Context::new(), |event| events.push(event))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            ctx.get_step_output(&StepId::new("a"))
+                .and_then(|value| value.as_str()),
+            Some("recovered")
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            SchedulerEvent::StepFailed {
+                step_id,
+                error,
+                will_retry: true,
+                attempt: 1,
+                ..
+            } if step_id == "a" && error.contains("timed out after 5ms")
+        )));
+    }
+
+    #[tokio::test]
     async fn test_scheduler_rejects_cycle() {
         let scheduler = Scheduler::new(Arc::new(SuccessExecutor));
-        let steps = vec![
-            tool_step("a", vec!["b"]),
-            tool_step("b", vec!["a"]),
-        ];
+        let steps = vec![tool_step("a", vec!["b"]), tool_step("b", vec!["a"])];
         let err = scheduler.run(&steps, Context::new()).await.unwrap_err();
         assert!(matches!(err, OrchestratorError::CycleDetected { .. }));
     }
@@ -552,7 +629,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_cb_step_succeeds_records_success() {
-        use rustflow_core::circuit_breaker::{CbState, CircuitBreakerConfig, CircuitBreakerRegistry};
+        use rustflow_core::circuit_breaker::{
+            CbState, CircuitBreakerConfig, CircuitBreakerRegistry,
+        };
 
         let reg = Arc::new(CircuitBreakerRegistry::with_default_config(
             CircuitBreakerConfig {
@@ -562,8 +641,8 @@ mod tests {
             },
         ));
 
-        let scheduler = Scheduler::new(Arc::new(SuccessExecutor))
-            .with_circuit_breaker(Arc::clone(&reg));
+        let scheduler =
+            Scheduler::new(Arc::new(SuccessExecutor)).with_circuit_breaker(Arc::clone(&reg));
 
         let steps = vec![tool_step("a", vec![])];
         scheduler.run(&steps, Context::new()).await.unwrap();
@@ -575,7 +654,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_cb_opens_after_failure_threshold() {
-        use rustflow_core::circuit_breaker::{CbState, CircuitBreakerConfig, CircuitBreakerRegistry};
+        use rustflow_core::circuit_breaker::{
+            CbState, CircuitBreakerConfig, CircuitBreakerRegistry,
+        };
 
         // failure_threshold = 2: after 2 consecutive failures the circuit opens.
         // The step has max_retries = 3:
@@ -591,15 +672,16 @@ mod tests {
         ));
 
         let mut events: Vec<SchedulerEvent> = Vec::new();
-        let scheduler = Scheduler::new(Arc::new(FailExecutor))
-            .with_circuit_breaker(Arc::clone(&reg));
+        let scheduler =
+            Scheduler::new(Arc::new(FailExecutor)).with_circuit_breaker(Arc::clone(&reg));
 
         let steps = vec![
-            Step::new_tool("a", "a", "noop", serde_json::Value::Null)
-                .with_retry(RetryPolicy::Fixed {
+            Step::new_tool("a", "a", "noop", serde_json::Value::Null).with_retry(
+                RetryPolicy::Fixed {
                     max_retries: 3,
                     interval_ms: 0,
-                }),
+                },
+            ),
         ];
         let _ = scheduler
             .run_with_events(&steps, Context::new(), |e| events.push(e))
@@ -632,8 +714,8 @@ mod tests {
         cb.record_failure(); // opens immediately (threshold = 1)
 
         let mut events: Vec<SchedulerEvent> = Vec::new();
-        let scheduler = Scheduler::new(Arc::new(SuccessExecutor))
-            .with_circuit_breaker(Arc::clone(&reg));
+        let scheduler =
+            Scheduler::new(Arc::new(SuccessExecutor)).with_circuit_breaker(Arc::clone(&reg));
 
         let steps = vec![tool_step("a", vec![])];
         let _ = scheduler
@@ -647,9 +729,11 @@ mod tests {
             if resource == "noop"
         )));
         // Step should not succeed (was rejected before executing).
-        assert!(!events
-            .iter()
-            .any(|e| matches!(e, SchedulerEvent::StepSucceeded { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, SchedulerEvent::StepSucceeded { .. }))
+        );
     }
 
     #[tokio::test]
@@ -673,8 +757,8 @@ mod tests {
         std::thread::sleep(Duration::from_millis(5));
 
         let mut events: Vec<SchedulerEvent> = Vec::new();
-        let scheduler = Scheduler::new(Arc::new(SuccessExecutor))
-            .with_circuit_breaker(Arc::clone(&reg));
+        let scheduler =
+            Scheduler::new(Arc::new(SuccessExecutor)).with_circuit_breaker(Arc::clone(&reg));
 
         let steps = vec![tool_step("a", vec![])];
         scheduler

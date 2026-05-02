@@ -23,6 +23,7 @@ pub enum RetryPolicy {
         /// Maximum number of retry attempts.
         max_retries: u32,
         /// Initial wait duration (in milliseconds).
+        #[serde(alias = "initial_ms")]
         initial_interval_ms: u64,
         /// Multiplier applied to the interval on each attempt.
         multiplier: f64,
@@ -171,5 +172,28 @@ mod tests {
         let json = serde_json::to_string(&policy).unwrap();
         let deserialized: RetryPolicy = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, policy);
+    }
+
+    #[test]
+    fn test_serde_exponential_accepts_legacy_initial_ms_alias() {
+        let json = r#"{
+            "kind": "exponential",
+            "max_retries": 5,
+            "initial_ms": 100,
+            "multiplier": 2.0,
+            "max_interval_ms": 10000
+        }"#;
+
+        let deserialized: RetryPolicy = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            deserialized,
+            RetryPolicy::Exponential {
+                max_retries: 5,
+                initial_interval_ms: 100,
+                multiplier: 2.0,
+                max_interval_ms: 10000,
+            }
+        );
     }
 }

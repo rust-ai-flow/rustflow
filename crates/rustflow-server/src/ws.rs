@@ -6,13 +6,14 @@
 //!
 //! Start a new workflow execution and stream its events.
 //! If a run is already active for this agent, the client is attached as an
-//! observer instead (no duplicate execution is started).
+//! observer instead (no duplicate execution is started). If the previous run
+//! is complete, a new run is started.
 //!
 //! ## `GET /agents/{id}/observe`
 //!
-//! Attach to an existing run as a read-only observer.  Replays all events
-//! emitted so far, then streams live events until the workflow finishes.
-//! Returns `workflow_failed` immediately if no active run exists.
+//! Attach to an existing active or completed run as a read-only observer.
+//! Replays all events emitted so far, then streams live events until the
+//! workflow finishes. Returns `workflow_failed` immediately if no run exists.
 //!
 //! # Protocol
 //!
@@ -52,7 +53,7 @@ use rustflow_core::context::Context;
 use rustflow_core::types::{AgentId, Value};
 use rustflow_orchestrator::{DefaultStepExecutor, Scheduler, SchedulerEvent};
 
-use crate::state::AppState;
+use crate::state::{AppState, RunStart};
 
 // ── WsEvent ───────────────────────────────────────────────────────────────────
 
@@ -103,14 +104,17 @@ impl From<SchedulerEvent> for WsEvent {
             SchedulerEvent::StepStarted { step_id, step_name } => {
                 WsEvent::StepStarted { step_id, step_name }
             }
-            SchedulerEvent::StepSucceeded { step_id, step_name, elapsed, output } => {
-                WsEvent::StepSucceeded {
-                    step_id,
-                    step_name,
-                    elapsed_ms: elapsed.as_millis() as u64,
-                    output,
-                }
-            }
+            SchedulerEvent::StepSucceeded {
+                step_id,
+                step_name,
+                elapsed,
+                output,
+            } => WsEvent::StepSucceeded {
+                step_id,
+                step_name,
+                elapsed_ms: elapsed.as_millis() as u64,
+                output,
+            },
             SchedulerEvent::StepFailed {
                 step_id,
                 step_name,
@@ -126,9 +130,15 @@ impl From<SchedulerEvent> for WsEvent {
                 attempt,
                 elapsed_ms: elapsed.as_millis() as u64,
             },
-            SchedulerEvent::StepRetrying { step_id, step_name, attempt } => {
-                WsEvent::StepRetrying { step_id, step_name, attempt }
-            }
+            SchedulerEvent::StepRetrying {
+                step_id,
+                step_name,
+                attempt,
+            } => WsEvent::StepRetrying {
+                step_id,
+                step_name,
+                attempt,
+            },
             SchedulerEvent::CircuitBreakerOpened { resource } => {
                 WsEvent::CircuitBreakerOpened { resource }
             }
@@ -198,48 +208,58 @@ async fn run_socket(
         Some(Err(e)) => return Err(e.into()),
     };
 
-    // 2. Look up the agent.
-    let agent_id = AgentId::new(&id);
-    let agent = match state.get_agent(&agent_id).await {
-        Some(a) => a,
-        None => {
-            let msg = serde_json::to_string(&WsEvent::WorkflowFailed {
-                error: format!("agent '{id}' not found"),
-            })?;
-            let _ = socket.send(Message::Text(msg.into())).await;
-            return Ok(());
+    // 2. Either observe an existing run or atomically create a new run.
+    let subscription = if observe_only {
+        match state.observe_run(&id).await {
+            Some(subscription) => subscription,
+            None => {
+                let msg = serde_json::to_string(&WsEvent::WorkflowFailed {
+                    error: format!("no run found for agent '{id}'"),
+                })?;
+                let _ = socket.send(Message::Text(msg.into())).await;
+                return Ok(());
+            }
+        }
+    } else {
+        match state.start_or_observe_run(id.clone()).await {
+            RunStart::Started(subscription) => {
+                // Existing runs can be observed even if the agent is later
+                // deleted. A fresh run still needs a current agent definition.
+                let agent_id = AgentId::new(&id);
+                match state.get_agent(&agent_id).await {
+                    Some(agent) => {
+                        let state_bg = state.clone();
+                        let id_bg = id.clone();
+                        let vars = start.vars;
+                        tokio::spawn(async move {
+                            run_workflow_bg(state_bg, id_bg, agent, vars).await;
+                        });
+                    }
+                    None => {
+                        state
+                            .finish_run(
+                                &id,
+                                WsEvent::WorkflowFailed {
+                                    error: format!("agent '{id}' not found"),
+                                },
+                            )
+                            .await;
+                    }
+                }
+                subscription
+            }
+            RunStart::Existing(subscription) => subscription,
         }
     };
 
-    // 3. Check for an existing run.
-    let has_run = state.observe_run(&id).await.is_some();
-
-    if !has_run {
-        if observe_only {
-            // Observe-only with no active run — tell the client.
-            let msg = serde_json::to_string(&WsEvent::WorkflowFailed {
-                error: format!("no active run for agent '{id}'"),
-            })?;
-            let _ = socket.send(Message::Text(msg.into())).await;
-            return Ok(());
-        }
-
-        // Start a new run in the background.
-        state.create_run(id.clone()).await;
-        let state_bg = state.clone();
-        let id_bg = id.clone();
-        let vars = start.vars;
-        tokio::spawn(async move {
-            run_workflow_bg(state_bg, id_bg, agent, vars).await;
-        });
-    }
-
-    // 4. Observe the run (works for both new and pre-existing runs).
-    //    `observe_run` is safe to call immediately after `create_run` because
-    //    the scheduler (spawned above) must acquire a write lock to emit its
-    //    first event, while we hold a read lock here — no race.
-    let (past, done, rx) = state.observe_run(&id).await.unwrap();
-    forward_to_socket(socket, past, done, rx).await?;
+    // 3. Replay buffered events, then stream live events until terminal.
+    forward_to_socket(
+        socket,
+        subscription.events,
+        subscription.done,
+        subscription.receiver,
+    )
+    .await?;
 
     info!(agent_id = %id, "WebSocket session closed");
     Ok(())
@@ -295,9 +315,13 @@ async fn run_workflow_bg(
                 .iter()
                 .map(|(k, v)| (k.clone(), v.inner().clone()))
                 .collect();
-            WsEvent::WorkflowCompleted { outputs: serde_json::Value::Object(outputs) }
+            WsEvent::WorkflowCompleted {
+                outputs: serde_json::Value::Object(outputs),
+            }
         }
-        Err(e) => WsEvent::WorkflowFailed { error: e.to_string() },
+        Err(e) => WsEvent::WorkflowFailed {
+            error: e.to_string(),
+        },
     };
 
     state.finish_run(&id, terminal).await;
@@ -473,7 +497,13 @@ mod tests {
     #[test]
     fn test_from_scheduler_event_step_succeeded() {
         let ws = WsEvent::from(make_step_succeeded());
-        assert!(matches!(ws, WsEvent::StepSucceeded { elapsed_ms: 820, .. }));
+        assert!(matches!(
+            ws,
+            WsEvent::StepSucceeded {
+                elapsed_ms: 820,
+                ..
+            }
+        ));
         let json = serde_json::to_value(&ws).unwrap();
         assert_eq!(json["elapsed_ms"], 820);
         assert_eq!(json["output"]["result"], "ok");
@@ -490,7 +520,14 @@ mod tests {
             elapsed: Duration::from_secs(1),
         };
         let ws = WsEvent::from(se);
-        assert!(matches!(ws, WsEvent::StepFailed { will_retry: false, attempt: 3, .. }));
+        assert!(matches!(
+            ws,
+            WsEvent::StepFailed {
+                will_retry: false,
+                attempt: 3,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -94,15 +94,17 @@ impl Tool for FileReadTool {
             })?;
 
         // Security: validate path against filesystem policy.
-        self.policy.fs.validate_path(&params.path).map_err(|reason| {
-            ToolError::SecurityViolation {
+        let validated_path = self
+            .policy
+            .fs
+            .validate_path(&params.path)
+            .map_err(|reason| ToolError::SecurityViolation {
                 name: "file_read".into(),
                 reason,
-            }
-        })?;
+            })?;
 
         let bytes =
-            tokio::fs::read(&params.path)
+            tokio::fs::read(&validated_path)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     name: "file_read".into(),
@@ -134,6 +136,16 @@ mod tests {
     use crate::tool::Tool;
     use std::path::PathBuf;
 
+    fn tmp_file_read_tool() -> FileReadTool {
+        FileReadTool::with_policy(Arc::new(SecurityPolicy {
+            fs: crate::security::FsPolicy {
+                allowed_dirs: vec![PathBuf::from("/tmp")],
+                ..Default::default()
+            },
+            ..Default::default()
+        }))
+    }
+
     #[test]
     fn test_file_read_tool_name() {
         let tool = FileReadTool::new();
@@ -150,7 +162,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_read_missing_file() {
-        let tool = FileReadTool::new();
+        let tool = tmp_file_read_tool();
         let ctx = Context::new();
         let input = json!({"path": "/tmp/rustflow_nonexistent_file_12345"});
         let err = tool.execute(input, &ctx).await.unwrap_err();
@@ -159,7 +171,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_read_success() {
-        let tool = FileReadTool::new();
+        let tool = tmp_file_read_tool();
         let ctx = Context::new();
 
         let path = "/tmp/rustflow_test_file_read.txt";
@@ -174,7 +186,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_read_base64() {
-        let tool = FileReadTool::new();
+        let tool = tmp_file_read_tool();
         let ctx = Context::new();
 
         let path = "/tmp/rustflow_test_file_read_b64.bin";

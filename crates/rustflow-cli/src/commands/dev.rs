@@ -36,6 +36,10 @@ pub struct DevArgs {
     /// Poll interval in milliseconds.
     #[arg(long, default_value = "500")]
     pub interval_ms: u64,
+
+    /// Allow workflow shell commands to execute.
+    #[arg(long)]
+    pub allow_shell: bool,
 }
 
 pub async fn execute(args: DevArgs) -> anyhow::Result<()> {
@@ -46,14 +50,18 @@ pub async fn execute(args: DevArgs) -> anyhow::Result<()> {
 
     println!();
     println!("  {}  RustFlow Dev", "⟳".cyan().bold());
-    println!("  {}  Watching: {}", "·".dark_grey(), file.display().to_string().cyan());
+    println!(
+        "  {}  Watching: {}",
+        "·".dark_grey(),
+        file.display().to_string().cyan()
+    );
     println!("  {}", "Press Ctrl+C to stop.".dark_grey());
     println!();
 
     let mut last_mtime = mtime(&file);
 
     // Run once immediately on startup.
-    run_workflow(&file, &args.vars).await;
+    run_workflow(&file, &args.vars, args.allow_shell).await;
 
     // Poll loop.
     loop {
@@ -65,7 +73,7 @@ pub async fn execute(args: DevArgs) -> anyhow::Result<()> {
                     println!();
                     println!("  {}  File changed — reloading...", "⟳".cyan().bold());
                     println!();
-                    run_workflow(&file, &args.vars).await;
+                    run_workflow(&file, &args.vars, args.allow_shell).await;
                 }
             }
             _ = tokio::signal::ctrl_c() => {
@@ -85,8 +93,12 @@ fn mtime(path: &PathBuf) -> Option<SystemTime> {
 }
 
 /// Load, build, and execute a workflow, printing live progress.
-async fn run_workflow(file: &PathBuf, raw_vars: &[String]) {
-    println!("  {}  {}", "▶".cyan(), file.display().to_string().dark_grey());
+async fn run_workflow(file: &PathBuf, raw_vars: &[String], allow_shell: bool) {
+    println!(
+        "  {}  {}",
+        "▶".cyan(),
+        file.display().to_string().dark_grey()
+    );
 
     // Parse workflow.
     let workflow = match WorkflowDef::from_file(file) {
@@ -104,7 +116,12 @@ async fn run_workflow(file: &PathBuf, raw_vars: &[String]) {
         }
     };
 
-    println!("  {}  {} ({} steps)", "·".dark_grey(), agent.name.clone().bold(), agent.steps.len());
+    println!(
+        "  {}  {} ({} steps)",
+        "·".dark_grey(),
+        agent.name.clone().bold(),
+        agent.steps.len()
+    );
     println!();
 
     // LLM gateway.
@@ -125,16 +142,27 @@ async fn run_workflow(file: &PathBuf, raw_vars: &[String]) {
 
     // Tool registry.
     let policy = Arc::new(SecurityPolicy {
-        shell: rustflow_tools::security::ShellPolicy { enabled: true, ..Default::default() },
+        shell: rustflow_tools::security::ShellPolicy {
+            enabled: allow_shell,
+            ..Default::default()
+        },
         ..Default::default()
     });
     let mut registry = ToolRegistry::new();
     registry.register(HttpTool::new()).ok();
-    registry.register(FileReadTool::with_policy(Arc::clone(&policy))).ok();
-    registry.register(FileWriteTool::with_policy(Arc::clone(&policy))).ok();
-    registry.register(ShellTool::with_policy(Arc::clone(&policy))).ok();
+    registry
+        .register(FileReadTool::with_policy(Arc::clone(&policy)))
+        .ok();
+    registry
+        .register(FileWriteTool::with_policy(Arc::clone(&policy)))
+        .ok();
+    registry
+        .register(ShellTool::with_policy(Arc::clone(&policy)))
+        .ok();
     registry.register(JsonExtractTool::new()).ok();
-    registry.register(EnvTool::with_policy(Arc::clone(&policy))).ok();
+    registry
+        .register(EnvTool::with_policy(Arc::clone(&policy)))
+        .ok();
     registry.register(SleepTool::new()).ok();
 
     // Context with CLI vars.
@@ -149,9 +177,10 @@ async fn run_workflow(file: &PathBuf, raw_vars: &[String]) {
     }
 
     // Live progress display.
-    let progress = Arc::new(std::sync::Mutex::new(
-        LiveProgress::new(&agent.steps, &agent.name),
-    ));
+    let progress = Arc::new(std::sync::Mutex::new(LiveProgress::new(
+        &agent.steps,
+        &agent.name,
+    )));
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<SchedulerEvent>();
     let render_done = Arc::new(tokio::sync::Notify::new());
 
@@ -191,18 +220,25 @@ async fn run_workflow(file: &PathBuf, raw_vars: &[String]) {
     });
 
     // Execute.
-    let executor = Arc::new(DefaultStepExecutor::new(Arc::new(gateway), Arc::new(registry)));
+    let executor = Arc::new(DefaultStepExecutor::new(
+        Arc::new(gateway),
+        Arc::new(registry),
+    ));
     let scheduler = Scheduler::new(executor);
     let tx = event_tx.clone();
     let result = scheduler
-        .run_with_events(&agent.steps, ctx, move |ev| { tx.send(ev).ok(); })
+        .run_with_events(&agent.steps, ctx, move |ev| {
+            tx.send(ev).ok();
+        })
         .await;
 
     drop(event_tx);
     render_done.notify_one();
     render_handle.await.ok();
 
-    { progress.lock().unwrap().render_final(); }
+    {
+        progress.lock().unwrap().render_final();
+    }
 
     match result {
         Ok(_) => println!("  {}  Completed\n", "✓".green().bold()),

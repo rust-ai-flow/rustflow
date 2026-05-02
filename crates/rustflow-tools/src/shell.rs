@@ -56,13 +56,7 @@ pub struct ShellTool {
 impl ShellTool {
     pub fn new() -> Self {
         Self {
-            policy: Arc::new(SecurityPolicy {
-                shell: crate::security::ShellPolicy {
-                    enabled: true,
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
+            policy: Arc::new(SecurityPolicy::default()),
         }
     }
 
@@ -198,6 +192,16 @@ mod tests {
     use super::*;
     use crate::tool::Tool;
 
+    fn enabled_shell_tool() -> ShellTool {
+        ShellTool::with_policy(Arc::new(SecurityPolicy {
+            shell: crate::security::ShellPolicy {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }))
+    }
+
     #[test]
     fn test_shell_tool_name() {
         let tool = ShellTool::new();
@@ -215,7 +219,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_echo() {
-        let tool = ShellTool::new();
+        let tool = enabled_shell_tool();
         let ctx = Context::new();
         let input = json!({"command": "echo hello"});
         let result = tool.execute(input, &ctx).await.unwrap();
@@ -225,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_with_env() {
-        let tool = ShellTool::new();
+        let tool = enabled_shell_tool();
         let ctx = Context::new();
         let input = json!({
             "command": "echo $MY_VAR",
@@ -240,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_nonzero_exit_check() {
-        let tool = ShellTool::new();
+        let tool = enabled_shell_tool();
         let ctx = Context::new();
         let input = json!({"command": "exit 1"});
         let err = tool.execute(input, &ctx).await.unwrap_err();
@@ -249,7 +253,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_nonzero_exit_no_check() {
-        let tool = ShellTool::new();
+        let tool = enabled_shell_tool();
         let ctx = Context::new();
         let input = json!({"command": "exit 42", "check": false});
         let result = tool.execute(input, &ctx).await.unwrap();
@@ -258,7 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_timeout() {
-        let tool = ShellTool::new();
+        let tool = enabled_shell_tool();
         let ctx = Context::new();
         let input = json!({"command": "sleep 10", "timeout_secs": 1});
         let err = tool.execute(input, &ctx).await.unwrap_err();
@@ -267,7 +271,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_cwd() {
-        let tool = ShellTool::new();
+        let tool = enabled_shell_tool();
         let ctx = Context::new();
         let input = json!({"command": "pwd", "cwd": "/tmp"});
         let result = tool.execute(input, &ctx).await.unwrap();
@@ -277,8 +281,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_disabled_by_policy() {
-        let policy = SecurityPolicy::default(); // shell.enabled = false
-        let tool = ShellTool::with_policy(Arc::new(policy));
+        let tool = ShellTool::new();
         let ctx = Context::new();
         let input = json!({"command": "echo hello"});
         let err = tool.execute(input, &ctx).await.unwrap_err();
