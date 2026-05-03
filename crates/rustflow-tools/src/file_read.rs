@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
+use tokio::io::AsyncReadExt;
 use tracing::instrument;
 
 use rustflow_core::context::Context;
@@ -32,6 +33,8 @@ fn default_encoding() -> String {
 ///
 /// File access is governed by the `SecurityPolicy` filesystem sandbox:
 /// - Paths are validated against allowed directories
+/// - Reads are capped by `fs.max_file_size` and fail rather than returning
+///   partial content
 /// - Symlinks are rejected by default
 /// - Sensitive paths (e.g., `.ssh`, `.env`) are blocked
 pub struct FileReadTool {
@@ -103,13 +106,43 @@ impl Tool for FileReadTool {
                 reason,
             })?;
 
-        let bytes =
-            tokio::fs::read(&validated_path)
+        let metadata =
+            tokio::fs::metadata(&validated_path)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     name: "file_read".into(),
-                    reason: format!("failed to read '{}': {e}", params.path),
+                    reason: format!("failed to stat '{}': {e}", params.path),
                 })?;
+        let metadata_len = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+        self.policy
+            .fs
+            .validate_write_size(metadata_len)
+            .map_err(|reason| ToolError::SecurityViolation {
+                name: "file_read".into(),
+                reason: reason.replace("write size", "read size"),
+            })?;
+
+        let file = tokio::fs::File::open(&validated_path).await.map_err(|e| {
+            ToolError::ExecutionFailed {
+                name: "file_read".into(),
+                reason: format!("failed to open '{}': {e}", params.path),
+            }
+        })?;
+        let mut bytes = Vec::with_capacity(metadata_len.min(8192));
+        file.take(self.policy.fs.max_file_size as u64 + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed {
+                name: "file_read".into(),
+                reason: format!("failed to read '{}': {e}", params.path),
+            })?;
+        self.policy
+            .fs
+            .validate_write_size(bytes.len())
+            .map_err(|reason| ToolError::SecurityViolation {
+                name: "file_read".into(),
+                reason: reason.replace("write size", "read size"),
+            })?;
 
         let content = match params.encoding.as_str() {
             "base64" => {
@@ -195,6 +228,28 @@ mod tests {
         let input = json!({"path": path, "encoding": "base64"});
         let result = tool.execute(input, &ctx).await.unwrap();
         assert_eq!(result.inner()["content"], "AAEC/w==");
+
+        tokio::fs::remove_file(path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_file_read_size_limit() {
+        let policy = SecurityPolicy {
+            fs: crate::security::FsPolicy {
+                allowed_dirs: vec![PathBuf::from("/tmp")],
+                max_file_size: 5,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let tool = FileReadTool::with_policy(Arc::new(policy));
+        let ctx = Context::new();
+
+        let path = "/tmp/rustflow_test_file_read_big.txt";
+        tokio::fs::write(path, "too large").await.unwrap();
+
+        let err = tool.execute(json!({"path": path}), &ctx).await.unwrap_err();
+        assert!(matches!(err, ToolError::SecurityViolation { .. }));
 
         tokio::fs::remove_file(path).await.ok();
     }

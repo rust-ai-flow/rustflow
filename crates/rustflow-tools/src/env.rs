@@ -89,8 +89,8 @@ impl Tool for EnvTool {
 
         match params.name {
             Some(var_name) => {
-                let raw_value = std::env::var(&var_name)
-                    .unwrap_or_else(|_| params.default.unwrap_or_default());
+                let raw_value =
+                    std::env::var(&var_name).unwrap_or_else(|_| params.default.unwrap_or_default());
 
                 // Security: redact sensitive variable values.
                 let value = self.policy.env.maybe_redact(&var_name, raw_value);

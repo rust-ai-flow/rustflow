@@ -7,6 +7,7 @@ use crossterm::style::Stylize;
 use tokio::sync::mpsc;
 use tracing::info;
 
+use rustflow_core::circuit_breaker::CircuitBreakerRegistry;
 use rustflow_core::context::Context;
 use rustflow_core::workflow::WorkflowDef;
 use rustflow_llm::LlmGateway;
@@ -149,7 +150,9 @@ async fn run_workflow(file: &PathBuf, raw_vars: &[String], allow_shell: bool) {
         ..Default::default()
     });
     let mut registry = ToolRegistry::new();
-    registry.register(HttpTool::new()).ok();
+    registry
+        .register(HttpTool::with_policy(Arc::clone(&policy)))
+        .ok();
     registry
         .register(FileReadTool::with_policy(Arc::clone(&policy)))
         .ok();
@@ -224,7 +227,8 @@ async fn run_workflow(file: &PathBuf, raw_vars: &[String], allow_shell: bool) {
         Arc::new(gateway),
         Arc::new(registry),
     ));
-    let scheduler = Scheduler::new(executor);
+    let scheduler =
+        Scheduler::new(executor).with_circuit_breaker(Arc::new(CircuitBreakerRegistry::default()));
     let tx = event_tx.clone();
     let result = scheduler
         .run_with_events(&agent.steps, ctx, move |ev| {

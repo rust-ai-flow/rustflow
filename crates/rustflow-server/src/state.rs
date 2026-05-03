@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock, broadcast};
 
 use rustflow_core::agent::Agent;
+use rustflow_core::circuit_breaker::CircuitBreakerRegistry;
 use rustflow_core::types::AgentId;
 use rustflow_llm::{LlmGateway, providers::glm::GlmProvider, providers::ollama::OllamaProvider};
 use rustflow_tools::security::{SecurityPolicy, ShellPolicy};
@@ -51,6 +52,8 @@ pub struct AppState {
     pub llm_gateway: Arc<LlmGateway>,
     /// Tool registry for executing tool steps.
     pub tool_registry: Arc<ToolRegistry>,
+    /// Circuit breakers shared by REST and WebSocket workflow execution.
+    pub circuit_breakers: Arc<CircuitBreakerRegistry>,
     /// Active and recently completed run records, keyed by agent ID.
     pub runs: Arc<RwLock<HashMap<String, RunRecord>>>,
 }
@@ -70,7 +73,9 @@ impl AppState {
         });
 
         let mut tool_registry = ToolRegistry::new();
-        tool_registry.register(HttpTool::new()).ok();
+        tool_registry
+            .register(HttpTool::with_policy(Arc::clone(&policy)))
+            .ok();
         tool_registry
             .register(FileReadTool::with_policy(Arc::clone(&policy)))
             .ok();
@@ -96,15 +101,29 @@ impl AppState {
             agents: Arc::new(RwLock::new(HashMap::new())),
             llm_gateway: Arc::new(llm_gateway),
             tool_registry: Arc::new(tool_registry),
+            circuit_breakers: Arc::new(CircuitBreakerRegistry::default()),
             runs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     pub fn with_services(llm_gateway: LlmGateway, tool_registry: ToolRegistry) -> Self {
+        Self::with_services_and_circuit_breakers(
+            llm_gateway,
+            tool_registry,
+            Arc::new(CircuitBreakerRegistry::default()),
+        )
+    }
+
+    pub fn with_services_and_circuit_breakers(
+        llm_gateway: LlmGateway,
+        tool_registry: ToolRegistry,
+        circuit_breakers: Arc<CircuitBreakerRegistry>,
+    ) -> Self {
         Self {
             agents: Arc::new(RwLock::new(HashMap::new())),
             llm_gateway: Arc::new(llm_gateway),
             tool_registry: Arc::new(tool_registry),
+            circuit_breakers,
             runs: Arc::new(RwLock::new(HashMap::new())),
         }
     }

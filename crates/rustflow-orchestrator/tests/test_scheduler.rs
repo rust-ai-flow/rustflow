@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use async_trait::async_trait;
 
@@ -15,9 +15,10 @@ struct SuccessExecutor;
 #[async_trait]
 impl StepExecutor for SuccessExecutor {
     async fn execute(&self, step: &Step, _ctx: &Context) -> Result<Value, String> {
-        Ok(Value::from(
-            serde_json::json!(format!("{}-done", step.id.as_str())),
-        ))
+        Ok(Value::from(serde_json::json!(format!(
+            "{}-done",
+            step.id.as_str()
+        ))))
     }
 }
 

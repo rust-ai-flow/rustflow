@@ -297,7 +297,8 @@ async fn run_workflow_bg(
         Arc::clone(&state.llm_gateway),
         Arc::clone(&state.tool_registry),
     ));
-    let scheduler = Scheduler::new(executor);
+    let scheduler =
+        Scheduler::new(executor).with_circuit_breaker(Arc::clone(&state.circuit_breakers));
 
     let result = scheduler
         .run_with_events(&agent.steps, ctx, move |event| {
@@ -400,6 +401,10 @@ async fn forward_to_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustflow_core::circuit_breaker::{CbState, CircuitBreakerConfig, CircuitBreakerRegistry};
+    use rustflow_core::step::Step;
+    use rustflow_llm::LlmGateway;
+    use rustflow_tools::ToolRegistry;
     use std::time::Duration;
 
     fn make_step_succeeded() -> SchedulerEvent {
@@ -580,5 +585,42 @@ mod tests {
     fn test_start_message_default() {
         let msg = StartMessage::default();
         assert!(msg.vars.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_ws_background_execution_uses_state_circuit_breaker_registry() {
+        let circuit_breakers = Arc::new(CircuitBreakerRegistry::with_default_config(
+            CircuitBreakerConfig {
+                failure_threshold: 1,
+                success_threshold: 1,
+                timeout_ms: 60_000,
+            },
+        ));
+        let state = AppState::with_services_and_circuit_breakers(
+            LlmGateway::new(),
+            ToolRegistry::new(),
+            Arc::clone(&circuit_breakers),
+        );
+        let agent = Agent::new(
+            "breaker-test",
+            vec![Step::new_tool(
+                "missing",
+                "Missing Tool",
+                "missing_tool",
+                serde_json::Value::Null,
+            )],
+        );
+        let id = agent.id.as_str().to_string();
+        state.create_run(id.clone()).await;
+
+        run_workflow_bg(state, id, agent, HashMap::new()).await;
+
+        assert_eq!(
+            circuit_breakers
+                .get("missing_tool")
+                .expect("breaker should be created")
+                .cb_state(),
+            CbState::Open
+        );
     }
 }

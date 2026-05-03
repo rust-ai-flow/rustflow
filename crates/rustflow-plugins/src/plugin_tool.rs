@@ -65,14 +65,13 @@ impl Tool for PluginTool {
         let tool_name = self.tool_name.clone();
 
         // WASM execution is synchronous and CPU-bound — move to a blocking thread.
-        let result = tokio::task::spawn_blocking(move || {
-            instance.execute_tool_sync(&tool_name, &input)
-        })
-        .await
-        .map_err(|e| ToolError::ExecutionFailed {
-            name: self.tool_name.clone(),
-            reason: format!("task join error: {e}"),
-        })?;
+        let result =
+            tokio::task::spawn_blocking(move || instance.execute_tool_sync(&tool_name, &input))
+                .await
+                .map_err(|e| ToolError::ExecutionFailed {
+                    name: self.tool_name.clone(),
+                    reason: format!("task join error: {e}"),
+                })?;
 
         result.map(Value::from).map_err(ToolError::from)
     }

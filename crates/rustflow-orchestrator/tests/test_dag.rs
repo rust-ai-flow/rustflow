@@ -107,8 +107,5 @@ fn test_build_dependency_map() {
     let map = DagParser::build_dependency_map(&steps);
     assert!(map["a"].is_empty());
     assert_eq!(map["b"], HashSet::from(["a".to_string()]));
-    assert_eq!(
-        map["c"],
-        HashSet::from(["a".to_string(), "b".to_string()])
-    );
+    assert_eq!(map["c"], HashSet::from(["a".to_string(), "b".to_string()]));
 }

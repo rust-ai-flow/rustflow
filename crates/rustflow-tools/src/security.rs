@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,15 @@ pub struct SecurityPolicy {
     #[serde(default)]
     pub shell: ShellPolicy,
 
+    /// Network target and response-size settings.
+    ///
+    /// This field was added after the initial public policy shape. It has
+    /// compatibility defaults for deserialised configs, but direct struct
+    /// literals should use `..Default::default()` so future policy expansion
+    /// does not force call-site churn.
+    #[serde(default)]
+    pub network: NetworkPolicy,
+
     /// Environment variable security settings.
     #[serde(default)]
     pub env: EnvPolicy,
@@ -26,6 +36,7 @@ impl Default for SecurityPolicy {
         Self {
             fs: FsPolicy::default(),
             shell: ShellPolicy::default(),
+            network: NetworkPolicy::default(),
             env: EnvPolicy::default(),
         }
     }
@@ -38,7 +49,11 @@ pub struct FsPolicy {
     /// If empty, defaults to the current working directory.
     pub allowed_dirs: Vec<PathBuf>,
 
-    /// Maximum file size in bytes for write operations (default: 50 MB).
+    /// Maximum file size in bytes for read/write operations (default: 50 MB).
+    ///
+    /// The original policy exposed one filesystem byte limit for writes. File
+    /// reads now reuse the same limit to add a read boundary without changing
+    /// the public `FsPolicy` shape.
     #[serde(default = "default_max_file_size")]
     pub max_file_size: usize,
 
@@ -200,9 +215,29 @@ pub struct ShellPolicy {
     pub enabled: bool,
 
     /// Allowed commands (whitelist). If empty and shell is enabled, all commands are allowed.
-    /// Commands are matched by the first word of the command string.
+    /// Commands are matched by executable name in direct mode.
     #[serde(default)]
     pub allowed_commands: Vec<String>,
+
+    /// Whether `shell: true` inputs may run through `sh -c`/`cmd /C`.
+    ///
+    /// Defaults to false so enabled shell tooling still avoids shell parsing.
+    /// Use direct mode with an `args` array for most commands.
+    #[serde(default)]
+    pub allow_shell_mode: bool,
+
+    /// Parent environment keys to copy into the child process after
+    /// `env_clear()`. Defaults to a minimal PATH set so executable lookup works
+    /// while avoiding inherited secret leakage.
+    #[serde(default = "default_inherited_env_keys")]
+    pub inherited_env_keys: Vec<String>,
+
+    /// User-supplied environment keys accepted from the tool input.
+    ///
+    /// Defaults to empty: command inputs must be explicitly whitelisted by
+    /// policy before they can add environment variables.
+    #[serde(default)]
+    pub allowed_env_keys: Vec<String>,
 
     /// Environment variable keys that are filtered out before command execution.
     #[serde(default = "default_filtered_env_keys")]
@@ -215,6 +250,18 @@ pub struct ShellPolicy {
     /// Maximum timeout in seconds (default: 300). Commands cannot set a timeout higher than this.
     #[serde(default = "default_max_timeout")]
     pub max_timeout_secs: u64,
+}
+
+#[cfg(not(windows))]
+fn default_inherited_env_keys() -> Vec<String> {
+    vec!["PATH".into()]
+}
+
+#[cfg(windows)]
+fn default_inherited_env_keys() -> Vec<String> {
+    let mut keys = vec!["PATH".into()];
+    keys.extend(["SystemRoot".into(), "PATHEXT".into()]);
+    keys
 }
 
 fn default_filtered_env_keys() -> Vec<String> {
@@ -239,6 +286,9 @@ impl Default for ShellPolicy {
         Self {
             enabled: false,
             allowed_commands: vec![],
+            allow_shell_mode: false,
+            inherited_env_keys: default_inherited_env_keys(),
+            allowed_env_keys: vec![],
             filtered_env_keys: default_filtered_env_keys(),
             max_output_size: default_max_output_size(),
             max_timeout_secs: default_max_timeout(),
@@ -247,32 +297,67 @@ impl Default for ShellPolicy {
 }
 
 impl ShellPolicy {
-    /// Validate a command against the shell security policy.
-    pub fn validate_command(&self, command: &str) -> Result<(), String> {
+    /// Validate an executable against the shell security policy.
+    pub fn validate_executable(&self, executable: &str) -> Result<(), String> {
         if !self.enabled {
             return Err("shell execution is disabled by security policy".into());
         }
 
+        if !self.allow_shell_mode && is_shell_executable(executable) {
+            return Err(
+                "direct execution of shell interpreters is disabled by security policy; use shell mode explicitly"
+                    .into(),
+            );
+        }
+
         if !self.allowed_commands.is_empty() {
-            let first_word = command.split_whitespace().next().unwrap_or("");
             // Also check the basename (e.g., `/usr/bin/ls` -> `ls`).
-            let basename = Path::new(first_word)
+            let basename = Path::new(executable)
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or(first_word);
+                .unwrap_or(executable);
 
             let allowed = self
                 .allowed_commands
                 .iter()
-                .any(|c| c == first_word || c == basename);
+                .any(|c| c == executable || c == basename);
             if !allowed {
                 return Err(format!(
                     "command '{}' is not in the allowed command list: {:?}",
-                    first_word, self.allowed_commands
+                    executable, self.allowed_commands
                 ));
             }
         }
 
+        Ok(())
+    }
+
+    /// Validate a legacy command string against the shell security policy.
+    pub fn validate_command(&self, command: &str) -> Result<(), String> {
+        let first_word = command.split_whitespace().next().unwrap_or("");
+        self.validate_executable(first_word)
+    }
+
+    /// Validate explicit shell-mode execution.
+    pub fn validate_shell_mode(&self, command: &str) -> Result<(), String> {
+        if !self.enabled {
+            return Err("shell execution is disabled by security policy".into());
+        }
+        if !self.allow_shell_mode {
+            return Err(
+                "shell parsing mode is disabled by security policy; use direct command args or enable shell mode explicitly"
+                    .into(),
+            );
+        }
+        if !self.allowed_commands.is_empty() {
+            return Err(
+                "shell parsing mode cannot be combined safely with an allowed_commands whitelist; use direct command args"
+                    .into(),
+            );
+        }
+        if command.trim().is_empty() {
+            return Err("command is empty".into());
+        }
         Ok(())
     }
 
@@ -284,6 +369,16 @@ impl ShellPolicy {
             .any(|k| k.to_uppercase() == upper)
     }
 
+    /// Check whether a parent environment key may be inherited.
+    pub fn can_inherit_env_key(&self, key: &str) -> bool {
+        env_key_in_list(key, &self.inherited_env_keys) && !self.is_env_key_filtered(key)
+    }
+
+    /// Check whether a user-provided environment key may be set.
+    pub fn can_set_env_key(&self, key: &str) -> bool {
+        env_key_in_list(key, &self.allowed_env_keys) && !self.is_env_key_filtered(key)
+    }
+
     /// Clamp timeout to the max allowed value.
     pub fn clamp_timeout(&self, requested: u64) -> u64 {
         requested.min(self.max_timeout_secs)
@@ -292,11 +387,128 @@ impl ShellPolicy {
     /// Truncate output to max_output_size.
     pub fn truncate_output(&self, output: String) -> String {
         if output.len() > self.max_output_size {
-            let mut truncated = output[..self.max_output_size].to_string();
+            let end = output
+                .char_indices()
+                .map(|(idx, _)| idx)
+                .take_while(|idx| *idx <= self.max_output_size)
+                .last()
+                .unwrap_or(0);
+            let mut truncated = output[..end].to_string();
             truncated.push_str("\n... [output truncated by security policy]");
             truncated
         } else {
             output
+        }
+    }
+}
+
+fn env_key_in_list(key: &str, list: &[String]) -> bool {
+    list.iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(key))
+}
+
+fn is_shell_executable(executable: &str) -> bool {
+    let basename = Path::new(executable)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(executable)
+        .to_ascii_lowercase();
+    matches!(
+        basename.as_str(),
+        "sh" | "bash" | "dash" | "zsh" | "fish" | "cmd" | "powershell" | "pwsh"
+    )
+}
+
+/// Network security policy for tools that contact remote resources.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkPolicy {
+    /// Allow HTTP tools to target localhost, loopback, link-local, unspecified,
+    /// or known cloud metadata service addresses.
+    ///
+    /// Defaults to false to reduce SSRF risk. Set this only for trusted
+    /// workflows that intentionally call local services such as Ollama.
+    #[serde(default)]
+    pub allow_local_targets: bool,
+
+    /// Maximum HTTP response body size in bytes (default: 10 MB).
+    #[serde(default = "default_max_http_response_size")]
+    pub max_http_response_size: usize,
+}
+
+fn default_max_http_response_size() -> usize {
+    10 * 1024 * 1024 // 10 MB
+}
+
+impl Default for NetworkPolicy {
+    fn default() -> Self {
+        Self {
+            allow_local_targets: false,
+            max_http_response_size: default_max_http_response_size(),
+        }
+    }
+}
+
+impl NetworkPolicy {
+    /// Validate a hostname before DNS resolution.
+    pub fn validate_host(&self, host: &str) -> Result<(), String> {
+        if self.allow_local_targets {
+            return Ok(());
+        }
+
+        let normalized = host.trim_end_matches('.').to_ascii_lowercase();
+        if normalized == "localhost" || normalized.ends_with(".localhost") {
+            return Err(format!(
+                "network target '{host}' is blocked by security policy; enable allow_local_targets to permit localhost"
+            ));
+        }
+
+        if let Ok(ip) = normalized.parse::<IpAddr>() {
+            self.validate_ip(ip)?;
+        }
+
+        Ok(())
+    }
+
+    /// Validate a resolved target IP address.
+    pub fn validate_ip(&self, ip: IpAddr) -> Result<(), String> {
+        if self.allow_local_targets {
+            return Ok(());
+        }
+
+        if is_blocked_local_or_metadata_ip(ip) {
+            return Err(format!(
+                "network target '{ip}' is blocked by security policy; enable allow_local_targets to permit local or metadata addresses"
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_http_response_size(&self, size: usize) -> Result<(), String> {
+        if size > self.max_http_response_size {
+            return Err(format!(
+                "HTTP response size {} bytes exceeds maximum allowed {} bytes",
+                size, self.max_http_response_size
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn is_blocked_local_or_metadata_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.octets() == [169, 254, 169, 254]
+                || ip.octets() == [100, 100, 100, 200]
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unicast_link_local()
+                || ip.is_unspecified()
+                || ip.to_string().eq_ignore_ascii_case("fd00:ec2::254")
         }
     }
 }

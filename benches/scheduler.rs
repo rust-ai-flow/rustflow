@@ -1,6 +1,10 @@
 use async_trait::async_trait;
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use rustflow_core::{context::Context, step::Step, types::{StepId, Value}};
+use rustflow_core::{
+    context::Context,
+    step::Step,
+    types::{StepId, Value},
+};
 use rustflow_orchestrator::scheduler::{Scheduler, StepExecutor};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
@@ -21,7 +25,12 @@ impl StepExecutor for NoopExecutor {
 fn linear_steps(n: usize) -> Vec<Step> {
     (0..n)
         .map(|i| {
-            let mut s = Step::new_tool(format!("s{i}"), format!("s{i}"), "noop", serde_json::Value::Null);
+            let mut s = Step::new_tool(
+                format!("s{i}"),
+                format!("s{i}"),
+                "noop",
+                serde_json::Value::Null,
+            );
             if i > 0 {
                 s.depends_on = vec![StepId::new(format!("s{}", i - 1))];
             }
@@ -32,7 +41,14 @@ fn linear_steps(n: usize) -> Vec<Step> {
 
 fn parallel_steps(n: usize) -> Vec<Step> {
     (0..n)
-        .map(|i| Step::new_tool(format!("s{i}"), format!("s{i}"), "noop", serde_json::Value::Null))
+        .map(|i| {
+            Step::new_tool(
+                format!("s{i}"),
+                format!("s{i}"),
+                "noop",
+                serde_json::Value::Null,
+            )
+        })
         .collect()
 }
 
@@ -49,9 +65,7 @@ fn bench_scheduler_parallel(c: &mut Criterion) {
             b.to_async(&rt).iter(|| {
                 let sched = Arc::clone(&scheduler);
                 let steps = steps.clone();
-                async move {
-                    black_box(sched.run(&steps, Context::new()).await.unwrap())
-                }
+                async move { black_box(sched.run(&steps, Context::new()).await.unwrap()) }
             });
         });
     }
@@ -69,9 +83,7 @@ fn bench_scheduler_linear(c: &mut Criterion) {
             b.to_async(&rt).iter(|| {
                 let sched = Arc::clone(&scheduler);
                 let steps = steps.clone();
-                async move {
-                    black_box(sched.run(&steps, Context::new()).await.unwrap())
-                }
+                async move { black_box(sched.run(&steps, Context::new()).await.unwrap()) }
             });
         });
     }

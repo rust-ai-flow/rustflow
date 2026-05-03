@@ -85,13 +85,25 @@ mod tests {
     #[test]
     fn test_error_constructors_and_display() {
         let cases: Vec<(RustFlowError, &str)> = vec![
-            (RustFlowError::orchestration("orch fail"), "orchestration error: orch fail"),
+            (
+                RustFlowError::orchestration("orch fail"),
+                "orchestration error: orch fail",
+            ),
             (RustFlowError::llm("llm fail"), "LLM error: llm fail"),
             (RustFlowError::tool("tool fail"), "tool error: tool fail"),
-            (RustFlowError::plugin("plugin fail"), "plugin error: plugin fail"),
-            (RustFlowError::config("config fail"), "config error: config fail"),
+            (
+                RustFlowError::plugin("plugin fail"),
+                "plugin error: plugin fail",
+            ),
+            (
+                RustFlowError::config("config fail"),
+                "config error: config fail",
+            ),
             (RustFlowError::timeout("timed out"), "timeout: timed out"),
-            (RustFlowError::circuit_breaker("open"), "circuit breaker open: open"),
+            (
+                RustFlowError::circuit_breaker("open"),
+                "circuit breaker open: open",
+            ),
         ];
 
         for (err, expected) in cases {

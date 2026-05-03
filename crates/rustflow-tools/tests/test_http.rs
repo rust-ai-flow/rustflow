@@ -1,7 +1,9 @@
 use rustflow_core::context::Context;
 use rustflow_tools::error::ToolError;
 use rustflow_tools::http::HttpTool;
+use rustflow_tools::security::{NetworkPolicy, SecurityPolicy};
 use rustflow_tools::tool::Tool;
+use std::sync::Arc;
 
 #[test]
 fn test_http_tool_name() {
@@ -61,7 +63,24 @@ async fn test_http_tool_invalid_method() {
 async fn test_http_tool_connection_refused() {
     let tool = HttpTool::new();
     let ctx = Context::new();
-    // Use a port that's almost certainly not listening
+    let input = serde_json::json!({
+        "url": "http://127.0.0.1:19999",
+        "timeout_secs": 1
+    });
+    let err = tool.execute(input, &ctx).await.unwrap_err();
+    assert!(matches!(err, ToolError::SecurityViolation { .. }));
+}
+
+#[tokio::test]
+async fn test_http_tool_local_target_allowed_by_policy() {
+    let tool = HttpTool::with_policy(Arc::new(SecurityPolicy {
+        network: NetworkPolicy {
+            allow_local_targets: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
+    let ctx = Context::new();
     let input = serde_json::json!({
         "url": "http://127.0.0.1:19999",
         "timeout_secs": 1

@@ -43,10 +43,7 @@ impl PluginInstance {
             .func_wrap(
                 HOST_MODULE,
                 "log",
-                |mut caller: wasmtime::Caller<'_, HostState>,
-                 level: i32,
-                 ptr: i32,
-                 len: i32| {
+                |mut caller: wasmtime::Caller<'_, HostState>, level: i32, ptr: i32, len: i32| {
                     let mem = match caller.get_export(MEMORY) {
                         Some(wasmtime::Extern::Memory(m)) => m,
                         _ => return,
@@ -69,19 +66,20 @@ impl PluginInstance {
             })?;
 
         let mut store = Store::new(engine, HostState);
-        let instance = linker
-            .instantiate(&mut store, &module)
-            .map_err(|e| PluginError::LoadFailed {
-                name: "<unknown>".into(),
-                reason: format!("instantiation failed: {e}"),
-            })?;
+        let instance =
+            linker
+                .instantiate(&mut store, &module)
+                .map_err(|e| PluginError::LoadFailed {
+                    name: "<unknown>".into(),
+                    reason: format!("instantiation failed: {e}"),
+                })?;
 
-        let memory = instance
-            .get_memory(&mut store, MEMORY)
-            .ok_or_else(|| PluginError::InvalidManifest {
+        let memory = instance.get_memory(&mut store, MEMORY).ok_or_else(|| {
+            PluginError::InvalidManifest {
                 name: "<unknown>".into(),
                 reason: "plugin does not export 'memory'".into(),
-            })?;
+            }
+        })?;
 
         // Read the manifest from WASM linear memory.
         let manifest = {
@@ -136,10 +134,13 @@ impl PluginInstance {
         input: &serde_json::Value,
     ) -> Result<serde_json::Value> {
         let plugin_name = self.manifest.name.clone();
-        let mut guard = self.inner.lock().map_err(|_| PluginError::ExecutionFailed {
-            name: plugin_name.clone(),
-            reason: "plugin lock poisoned".into(),
-        })?;
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| PluginError::ExecutionFailed {
+                name: plugin_name.clone(),
+                reason: "plugin lock poisoned".into(),
+            })?;
 
         let PluginInner {
             ref mut store,
@@ -160,7 +161,9 @@ impl PluginInstance {
                 reason: format!("missing '{FN_EXECUTE}': {e}"),
             })?;
 
-        let dealloc = instance.get_typed_func::<(i32, i32), ()>(&mut *store, FN_DEALLOC).ok();
+        let dealloc = instance
+            .get_typed_func::<(i32, i32), ()>(&mut *store, FN_DEALLOC)
+            .ok();
 
         // Write tool name into WASM memory.
         let tool_name_bytes = tool_name.as_bytes();
@@ -173,10 +176,11 @@ impl PluginInstance {
         }
 
         // Write input JSON into WASM memory.
-        let input_json = serde_json::to_string(input).map_err(|e| PluginError::ExecutionFailed {
-            name: plugin_name.clone(),
-            reason: format!("failed to serialise input: {e}"),
-        })?;
+        let input_json =
+            serde_json::to_string(input).map_err(|e| PluginError::ExecutionFailed {
+                name: plugin_name.clone(),
+                reason: format!("failed to serialise input: {e}"),
+            })?;
         let input_bytes = input_json.as_bytes();
         let input_ptr = alloc
             .call(&mut *store, input_bytes.len() as i32)

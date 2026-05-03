@@ -25,6 +25,9 @@ pub fn create_router(state: AppState) -> Router {
         // Agent execution (WebSocket observe-only — attach to existing run)
         .route("/agents/{id}/observe", get(ws::observe_agent))
         // Playground API
-        .route("/playground/agents", post(playground::playground_create_agent))
+        .route(
+            "/playground/agents",
+            post(playground::playground_create_agent),
+        )
         .with_state(state)
 }

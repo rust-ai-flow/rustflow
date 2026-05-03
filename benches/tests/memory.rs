@@ -57,7 +57,14 @@ fn heap_bytes() -> usize {
 
 fn make_steps(n: usize) -> Vec<Step> {
     (0..n)
-        .map(|i| Step::new_tool(format!("s{i}"), format!("step-{i}"), "noop", serde_json::Value::Null))
+        .map(|i| {
+            Step::new_tool(
+                format!("s{i}"),
+                format!("step-{i}"),
+                "noop",
+                serde_json::Value::Null,
+            )
+        })
         .collect()
 }
 
@@ -83,12 +90,12 @@ fn agent_heap_footprint_under_5mb() {
     let total = heap_bytes() - baseline;
     let per_agent = total / N;
 
-    println!(
-        "\n  {} agents × {} steps each",
-        N, STEPS_PER_AGENT
-    );
+    println!("\n  {} agents × {} steps each", N, STEPS_PER_AGENT);
     println!("  Total heap delta : {:.2} KB", total as f64 / 1024.0);
-    println!("  Per-agent heap   : {:.2} KB  (limit: 5 MB)", per_agent as f64 / 1024.0);
+    println!(
+        "  Per-agent heap   : {:.2} KB  (limit: 5 MB)",
+        per_agent as f64 / 1024.0
+    );
 
     // Keep agents alive until after measurement.
     drop(agents);
@@ -163,16 +170,16 @@ fn context_heap_per_step_output() {
 
     for i in 0..OUTPUTS {
         let sid = StepId::new(format!("s{i}"));
-        ctx.set_step_output(&sid, rustflow_core::types::Value::from(serde_json::json!(i)));
+        ctx.set_step_output(
+            &sid,
+            rustflow_core::types::Value::from(serde_json::json!(i)),
+        );
     }
 
     let total = heap_bytes() - baseline;
     let per_output = total / OUTPUTS;
 
-    println!(
-        "\n  Context with {} step outputs",
-        OUTPUTS
-    );
+    println!("\n  Context with {} step outputs", OUTPUTS);
     println!("  Total heap : {:.2} KB", total as f64 / 1024.0);
     println!("  Per output : {} B", per_output);
 
@@ -183,8 +190,8 @@ fn context_heap_per_step_output() {
 #[test]
 fn scheduler_run_heap_overhead() {
     use async_trait::async_trait;
-    use rustflow_orchestrator::scheduler::{Scheduler, StepExecutor};
     use rustflow_core::types::Value;
+    use rustflow_orchestrator::scheduler::{Scheduler, StepExecutor};
     use std::sync::Arc;
 
     struct NoopExecutor;
@@ -221,10 +228,7 @@ fn scheduler_run_heap_overhead() {
     let total = heap_bytes().saturating_sub(baseline);
     let per_run = total / RUNS;
 
-    println!(
-        "\n  {} scheduler runs (10 parallel steps each)",
-        RUNS
-    );
+    println!("\n  {} scheduler runs (10 parallel steps each)", RUNS);
     println!("  Net heap delta after {} runs: {} B", RUNS, total);
     println!("  Per-run overhead : {} B", per_run);
 }

@@ -6,6 +6,7 @@ use crossterm::style::Stylize;
 use tokio::sync::mpsc;
 use tracing::info;
 
+use rustflow_core::circuit_breaker::CircuitBreakerRegistry;
 use rustflow_core::context::Context;
 use rustflow_core::types::Value;
 use rustflow_core::workflow::WorkflowDef;
@@ -96,7 +97,9 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
     });
 
     let mut tool_registry = ToolRegistry::new();
-    tool_registry.register(HttpTool::new()).ok();
+    tool_registry
+        .register(HttpTool::with_policy(Arc::clone(&policy)))
+        .ok();
     tool_registry
         .register(FileReadTool::with_policy(Arc::clone(&policy)))
         .ok();
@@ -130,7 +133,8 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
         Arc::new(gateway),
         Arc::new(tool_registry),
     ));
-    let scheduler = Scheduler::new(executor);
+    let scheduler =
+        Scheduler::new(executor).with_circuit_breaker(Arc::new(CircuitBreakerRegistry::default()));
 
     // 6. Set up the live progress display.
     let progress = Arc::new(std::sync::Mutex::new(LiveProgress::new(

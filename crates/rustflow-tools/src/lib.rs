@@ -17,7 +17,7 @@ pub use file_write::FileWriteTool;
 pub use http::HttpTool;
 pub use json_extract::JsonExtractTool;
 pub use registry::ToolRegistry;
+pub use security::SecurityPolicy;
 pub use shell::ShellTool;
 pub use sleep::SleepTool;
-pub use security::SecurityPolicy;
 pub use tool::Tool;

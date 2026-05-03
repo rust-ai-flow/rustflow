@@ -6,7 +6,11 @@
 /// Run with:
 ///   cargo test -p rustflow-benches --test concurrency --release -- --nocapture
 use async_trait::async_trait;
-use rustflow_core::{context::Context, step::Step, types::{StepId, Value}};
+use rustflow_core::{
+    context::Context,
+    step::Step,
+    types::{StepId, Value},
+};
 use rustflow_orchestrator::scheduler::{Scheduler, StepExecutor};
 use std::sync::Arc;
 use std::time::Instant;
@@ -22,14 +26,26 @@ impl StepExecutor for NoopExecutor {
 
 fn parallel_steps(n: usize) -> Vec<Step> {
     (0..n)
-        .map(|i| Step::new_tool(format!("s{i}"), format!("s{i}"), "noop", serde_json::Value::Null))
+        .map(|i| {
+            Step::new_tool(
+                format!("s{i}"),
+                format!("s{i}"),
+                "noop",
+                serde_json::Value::Null,
+            )
+        })
         .collect()
 }
 
 fn linear_steps(n: usize) -> Vec<Step> {
     (0..n)
         .map(|i| {
-            let mut s = Step::new_tool(format!("s{i}"), format!("s{i}"), "noop", serde_json::Value::Null);
+            let mut s = Step::new_tool(
+                format!("s{i}"),
+                format!("s{i}"),
+                "noop",
+                serde_json::Value::Null,
+            );
             if i > 0 {
                 s.depends_on = vec![StepId::new(format!("s{}", i - 1))];
             }
@@ -71,7 +87,12 @@ async fn concurrent_1000_agents_parallel_workflow() {
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_10000_agents_single_step() {
     let scheduler = Arc::new(Scheduler::new(Arc::new(NoopExecutor)));
-    let steps = Arc::new(vec![Step::new_tool("s0", "s0", "noop", serde_json::Value::Null)]);
+    let steps = Arc::new(vec![Step::new_tool(
+        "s0",
+        "s0",
+        "noop",
+        serde_json::Value::Null,
+    )]);
 
     let start = Instant::now();
     let handles: Vec<_> = (0..10_000)
@@ -128,7 +149,10 @@ async fn concurrent_outputs_are_correct() {
                 let ctx = sched.run(&steps, Context::new()).await.unwrap();
                 for i in 0..5 {
                     let key = StepId::new(format!("s{i}"));
-                    assert!(ctx.get_step_output(&key).is_some(), "missing output for s{i}");
+                    assert!(
+                        ctx.get_step_output(&key).is_some(),
+                        "missing output for s{i}"
+                    );
                 }
             })
         })
