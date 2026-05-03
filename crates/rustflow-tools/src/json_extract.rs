@@ -110,10 +110,8 @@ impl Tool for JsonExtractTool {
                 reason: e.to_string(),
             })?;
 
-        let result =
-            json_path(&params.data, &params.path).unwrap_or_else(|| {
-                params.default.unwrap_or(serde_json::Value::Null)
-            });
+        let result = json_path(&params.data, &params.path)
+            .unwrap_or_else(|| params.default.unwrap_or(serde_json::Value::Null));
 
         Ok(Value::from(result))
     }

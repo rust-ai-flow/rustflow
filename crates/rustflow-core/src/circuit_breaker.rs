@@ -114,7 +114,9 @@ impl CircuitBreaker {
                 };
                 false
             }
-            StateInner::HalfOpen { consecutive_successes } => {
+            StateInner::HalfOpen {
+                consecutive_successes,
+            } => {
                 let new_successes = consecutive_successes + 1;
                 if new_successes >= inner.config.success_threshold {
                     inner.state = StateInner::Closed {
@@ -139,7 +141,9 @@ impl CircuitBreaker {
     pub fn record_failure(&self) -> bool {
         let mut inner = self.inner.lock().unwrap();
         match &inner.state {
-            StateInner::Closed { consecutive_failures } => {
+            StateInner::Closed {
+                consecutive_failures,
+            } => {
                 let new_failures = consecutive_failures + 1;
                 if new_failures >= inner.config.failure_threshold {
                     inner.state = StateInner::Open {

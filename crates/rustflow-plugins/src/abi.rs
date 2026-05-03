@@ -45,8 +45,10 @@ pub fn read_str(data: &[u8], ptr: u32, len: u32) -> crate::error::Result<String>
                 data.len()
             ),
         })?;
-    String::from_utf8(data[start..end].to_vec()).map_err(|e| crate::error::PluginError::AbiViolation {
-        reason: format!("read_str: invalid UTF-8 at ptr={ptr}: {e}"),
+    String::from_utf8(data[start..end].to_vec()).map_err(|e| {
+        crate::error::PluginError::AbiViolation {
+            reason: format!("read_str: invalid UTF-8 at ptr={ptr}: {e}"),
+        }
     })
 }
 

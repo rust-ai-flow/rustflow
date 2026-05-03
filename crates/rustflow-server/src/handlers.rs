@@ -147,7 +147,8 @@ pub async fn run_agent(
         Arc::clone(&state.llm_gateway),
         Arc::clone(&state.tool_registry),
     ));
-    let scheduler = Scheduler::new(executor);
+    let scheduler =
+        Scheduler::new(executor).with_circuit_breaker(Arc::clone(&state.circuit_breakers));
 
     // Run the workflow.
     let result_ctx = scheduler
@@ -175,4 +176,57 @@ pub async fn health() -> Json<serde_json::Value> {
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustflow_core::circuit_breaker::{CbState, CircuitBreakerConfig, CircuitBreakerRegistry};
+    use rustflow_llm::LlmGateway;
+    use rustflow_tools::ToolRegistry;
+
+    #[tokio::test]
+    async fn test_run_agent_uses_state_circuit_breaker_registry() {
+        let circuit_breakers = Arc::new(CircuitBreakerRegistry::with_default_config(
+            CircuitBreakerConfig {
+                failure_threshold: 1,
+                success_threshold: 1,
+                timeout_ms: 60_000,
+            },
+        ));
+        let state = AppState::with_services_and_circuit_breakers(
+            LlmGateway::new(),
+            ToolRegistry::new(),
+            Arc::clone(&circuit_breakers),
+        );
+        let agent = Agent::new(
+            "breaker-test",
+            vec![Step::new_tool(
+                "missing",
+                "Missing Tool",
+                "missing_tool",
+                serde_json::Value::Null,
+            )],
+        );
+        let id = agent.id.as_str().to_string();
+        state.upsert_agent(agent).await;
+
+        let result = run_agent(
+            State(state),
+            Path(id),
+            Json(RunAgentRequest {
+                vars: HashMap::new(),
+            }),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            circuit_breakers
+                .get("missing_tool")
+                .expect("breaker should be created")
+                .cb_state(),
+            CbState::Open
+        );
+    }
 }

@@ -108,12 +108,14 @@ impl Tool for FileWriteTool {
             })?;
 
         // Security: validate path against filesystem policy.
-        self.policy.fs.validate_path(&params.path).map_err(|reason| {
-            ToolError::SecurityViolation {
+        let validated_path = self
+            .policy
+            .fs
+            .validate_path(&params.path)
+            .map_err(|reason| ToolError::SecurityViolation {
                 name: "file_write".into(),
                 reason,
-            }
-        })?;
+            })?;
 
         // Security: validate write size.
         self.policy
@@ -126,7 +128,7 @@ impl Tool for FileWriteTool {
 
         // Create parent directories if requested.
         if params.mkdir {
-            if let Some(parent) = std::path::Path::new(&params.path).parent() {
+            if let Some(parent) = validated_path.parent() {
                 if !parent.as_os_str().is_empty() {
                     tokio::fs::create_dir_all(parent).await.map_err(|e| {
                         ToolError::ExecutionFailed {
@@ -143,7 +145,7 @@ impl Tool for FileWriteTool {
             let mut file = tokio::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(&params.path)
+                .open(&validated_path)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     name: "file_write".into(),
@@ -156,7 +158,7 @@ impl Tool for FileWriteTool {
                     reason: format!("failed to write: {e}"),
                 })?;
         } else {
-            tokio::fs::write(&params.path, &params.content)
+            tokio::fs::write(&validated_path, &params.content)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed {
                     name: "file_write".into(),
@@ -179,6 +181,16 @@ mod tests {
     use crate::tool::Tool;
     use std::path::PathBuf;
 
+    fn tmp_file_write_tool() -> FileWriteTool {
+        FileWriteTool::with_policy(Arc::new(SecurityPolicy {
+            fs: crate::security::FsPolicy {
+                allowed_dirs: vec![PathBuf::from("/tmp")],
+                ..Default::default()
+            },
+            ..Default::default()
+        }))
+    }
+
     #[test]
     fn test_file_write_tool_name() {
         let tool = FileWriteTool::new();
@@ -187,7 +199,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_write_and_read_back() {
-        let tool = FileWriteTool::new();
+        let tool = tmp_file_write_tool();
         let ctx = Context::new();
         let path = "/tmp/rustflow_test_write.txt";
 
@@ -203,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_write_append() {
-        let tool = FileWriteTool::new();
+        let tool = tmp_file_write_tool();
         let ctx = Context::new();
         let path = "/tmp/rustflow_test_append.txt";
 
@@ -221,7 +233,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_write_mkdir() {
-        let tool = FileWriteTool::new();
+        let tool = tmp_file_write_tool();
         let ctx = Context::new();
         let path = "/tmp/rustflow_test_mkdir_dir/sub/file.txt";
 
@@ -231,7 +243,9 @@ mod tests {
         let content = tokio::fs::read_to_string(path).await.unwrap();
         assert_eq!(content, "nested");
 
-        tokio::fs::remove_dir_all("/tmp/rustflow_test_mkdir_dir").await.ok();
+        tokio::fs::remove_dir_all("/tmp/rustflow_test_mkdir_dir")
+            .await
+            .ok();
     }
 
     #[tokio::test]
@@ -247,6 +261,7 @@ mod tests {
     async fn test_file_write_size_limit() {
         let policy = SecurityPolicy {
             fs: crate::security::FsPolicy {
+                allowed_dirs: vec![PathBuf::from("/tmp")],
                 max_file_size: 10,
                 ..Default::default()
             },

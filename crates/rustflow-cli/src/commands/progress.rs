@@ -2,11 +2,7 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use crossterm::{
-    cursor, execute,
-    style::Stylize,
-    terminal,
-};
+use crossterm::{cursor, execute, style::Stylize, terminal};
 
 use rustflow_core::step::{Step, StepKind, StepState};
 use rustflow_orchestrator::{SchedulerEvent, compute_layers, flow_renderer::ExecutionLayer};
@@ -293,13 +289,7 @@ impl LiveProgress {
         // Total time
         if let Some(start) = self.start_time {
             let total = start.elapsed();
-            writeln!(
-                stdout,
-                "  {} {:.1}s",
-                "Total:".bold(),
-                total.as_secs_f64()
-            )
-            .ok();
+            writeln!(stdout, "  {} {:.1}s", "Total:".bold(), total.as_secs_f64()).ok();
             writeln!(stdout).ok();
         }
 
@@ -344,11 +334,9 @@ impl LiveProgress {
             StepState::Running => {
                 let frame = SPINNER_FRAMES[self.spinner_idx];
                 let icon = format!("{}", frame.cyan());
-                let elapsed = sd
-                    .start_time
-                    .map(|t| t.elapsed())
-                    .unwrap_or(Duration::ZERO);
-                let elapsed_str = format!(" {}", format!("{:.1}s", elapsed.as_secs_f64()).dark_grey());
+                let elapsed = sd.start_time.map(|t| t.elapsed()).unwrap_or(Duration::ZERO);
+                let elapsed_str =
+                    format!(" {}", format!("{:.1}s", elapsed.as_secs_f64()).dark_grey());
                 (icon, elapsed_str)
             }
             StepState::Success => {
@@ -368,10 +356,7 @@ impl LiveProgress {
             StepState::Retrying => {
                 let frame = SPINNER_FRAMES[self.spinner_idx];
                 let icon = format!("{}", frame.yellow());
-                let elapsed = sd
-                    .start_time
-                    .map(|t| t.elapsed())
-                    .unwrap_or(Duration::ZERO);
+                let elapsed = sd.start_time.map(|t| t.elapsed()).unwrap_or(Duration::ZERO);
                 let elapsed_str = format!(
                     " {}",
                     format!("{:.1}s (retrying)", elapsed.as_secs_f64()).yellow()

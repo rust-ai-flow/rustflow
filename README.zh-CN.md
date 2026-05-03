@@ -139,17 +139,17 @@ steps:
     retry:
       kind: exponential
       max_retries: 3
-      initial_ms: 1000
+      initial_interval_ms: 1000
 ```
 
 ### 运行
 
 ```bash
 # 执行工作流
-rustflow run research.yaml --vars '{"url":"https://example.com"}'
+rustflow run research.yaml --var url=https://example.com
 
 # 监听文件变更，保存即重跑
-rustflow dev research.yaml --vars '{"url":"https://example.com"}'
+rustflow dev research.yaml --var url=https://example.com
 
 # 启动 API 服务器
 rustflow serve
@@ -193,6 +193,19 @@ rustflow <command> [options]
 ```
 
 所有步骤在同一流程图中原地刷新，不产生滚动噪音。
+
+### 安全默认值
+
+CLI、服务端和 Playground 默认禁用 Shell 执行。只对可信工作流使用 `--allow-shell` 显式开启：
+
+```bash
+rustflow run workflow.yaml --allow-shell
+rustflow dev workflow.yaml --allow-shell
+rustflow serve --allow-shell
+rustflow playground --allow-shell
+```
+
+文件工具默认限制在当前工作目录内；嵌入式使用可通过自定义 `SecurityPolicy.allowed_dirs` 显式放宽。
 
 ### `rustflow doctor`
 
@@ -410,7 +423,7 @@ retry:
 retry:
   kind: exponential
   max_retries: 5
-  initial_ms: 500
+  initial_interval_ms: 500
   multiplier: 2.0      # 500 → 1000 → 2000 → 4000 ms
   max_interval_ms: 30000
 ```

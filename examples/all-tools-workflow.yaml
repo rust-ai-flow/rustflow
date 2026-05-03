@@ -1,5 +1,5 @@
 name: all-tools-workflow
-description: Comprehensive example demonstrating all built-in tools
+description: Comprehensive example demonstrating all built-in tools. Run with --allow-shell.
 
 steps:
   # Step 1: Read environment variable
@@ -34,7 +34,7 @@ steps:
     tool:
       name: file_write
       input:
-        path: "/tmp/rustflow_example_data.json"
+        path: "rustflow_example_data.json"
         content: "{{steps.fetch_data.output}}"
     depends_on:
       - fetch_data
@@ -45,7 +45,7 @@ steps:
     tool:
       name: shell
       input:
-        command: "cat /tmp/rustflow_example_data.json | jq '.title'"
+        command: "cat rustflow_example_data.json | jq '.title'"
         timeout_secs: 10
     depends_on:
       - write_data
@@ -56,7 +56,7 @@ steps:
     tool:
       name: file_read
       input:
-        path: "/tmp/rustflow_example_data.json"
+        path: "rustflow_example_data.json"
     depends_on:
       - write_data
 
@@ -78,7 +78,7 @@ steps:
     tool:
       name: file_write
       input:
-        path: "/tmp/rustflow_analysis.txt"
+        path: "rustflow_analysis.txt"
         content: "{{steps.analyze_data.output}}"
     depends_on:
       - analyze_data
@@ -99,7 +99,7 @@ steps:
     tool:
       name: shell
       input:
-        command: "ls -la /tmp/rustflow_*.{json,txt}"
+        command: "ls -la rustflow_*.{json,txt}"
         timeout_secs: 10
     depends_on:
       - sleep

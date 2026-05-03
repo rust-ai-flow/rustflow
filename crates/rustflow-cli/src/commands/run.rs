@@ -6,6 +6,7 @@ use crossterm::style::Stylize;
 use tokio::sync::mpsc;
 use tracing::info;
 
+use rustflow_core::circuit_breaker::CircuitBreakerRegistry;
 use rustflow_core::context::Context;
 use rustflow_core::types::Value;
 use rustflow_core::workflow::WorkflowDef;
@@ -36,6 +37,10 @@ pub struct RunArgs {
     /// Watch for file changes and re-run automatically.
     #[arg(short, long)]
     pub watch: bool,
+
+    /// Allow workflow shell commands to execute.
+    #[arg(long)]
+    pub allow_shell: bool,
 }
 
 pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
@@ -45,15 +50,12 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
             file: args.file,
             vars: args.vars,
             interval_ms: 500,
+            allow_shell: args.allow_shell,
         })
         .await;
     }
 
-    println!(
-        "{}  Loading workflow: {}",
-        "▶".cyan(),
-        args.file.display()
-    );
+    println!("{}  Loading workflow: {}", "▶".cyan(), args.file.display());
 
     // 1. Parse the workflow YAML.
     let workflow = WorkflowDef::from_file(&args.file).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -88,14 +90,16 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
     // 3. Set up security policy and tool registry.
     let policy = Arc::new(SecurityPolicy {
         shell: rustflow_tools::security::ShellPolicy {
-            enabled: true,
+            enabled: args.allow_shell,
             ..Default::default()
         },
         ..Default::default()
     });
 
     let mut tool_registry = ToolRegistry::new();
-    tool_registry.register(HttpTool::new()).ok();
+    tool_registry
+        .register(HttpTool::with_policy(Arc::clone(&policy)))
+        .ok();
     tool_registry
         .register(FileReadTool::with_policy(Arc::clone(&policy)))
         .ok();
@@ -129,7 +133,8 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
         Arc::new(gateway),
         Arc::new(tool_registry),
     ));
-    let scheduler = Scheduler::new(executor);
+    let scheduler =
+        Scheduler::new(executor).with_circuit_breaker(Arc::new(CircuitBreakerRegistry::default()));
 
     // 6. Set up the live progress display.
     let progress = Arc::new(std::sync::Mutex::new(LiveProgress::new(

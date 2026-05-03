@@ -35,8 +35,7 @@ impl GlmProvider {
     /// Create from environment variables `GLM_API_KEY` and optionally `GLM_MODEL`.
     pub fn from_env() -> Self {
         let api_key = std::env::var("GLM_API_KEY").expect("GLM_API_KEY must be set");
-        let model =
-            std::env::var("GLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+        let model = std::env::var("GLM_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
         Self {
             api_key,
             model,

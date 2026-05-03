@@ -231,10 +231,7 @@ pub fn render_summary(
 
         for step_id in &layer.step_ids {
             if let Some(&step) = step_map.get(step_id.as_str()) {
-                let state = states
-                    .get(step_id)
-                    .cloned()
-                    .unwrap_or(StepState::Pending);
+                let state = states.get(step_id).cloned().unwrap_or(StepState::Pending);
                 let duration = durations.get(step_id);
                 let line = render_step_event(step, &state, duration.copied());
                 let _ = writeln!(out, "{line}");
@@ -245,11 +242,7 @@ pub fn render_summary(
     }
 
     let _ = writeln!(out);
-    let _ = writeln!(
-        out,
-        "  Total: {:.1}s",
-        total_elapsed.as_secs_f64()
-    );
+    let _ = writeln!(out, "  Total: {:.1}s", total_elapsed.as_secs_f64());
     let _ = writeln!(out);
 
     out

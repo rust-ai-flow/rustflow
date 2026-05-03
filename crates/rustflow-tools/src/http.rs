@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -7,6 +9,7 @@ use rustflow_core::context::Context;
 use rustflow_core::types::Value;
 
 use crate::error::{Result, ToolError};
+use crate::security::SecurityPolicy;
 use crate::tool::Tool;
 
 /// Input parameters for the HTTP tool.
@@ -50,6 +53,7 @@ struct HttpOutput {
 /// returned as a plain string.
 pub struct HttpTool {
     client: reqwest::Client,
+    policy: Arc<SecurityPolicy>,
 }
 
 impl HttpTool {
@@ -57,8 +61,23 @@ impl HttpTool {
         Self {
             client: reqwest::Client::builder()
                 .user_agent("rustflow-tools/0.1")
+                // Redirect targets must be validated before use. Keeping
+                // redirects explicit avoids SSRF bypasses via 30x responses.
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("failed to build reqwest client"),
+            policy: Arc::new(SecurityPolicy::default()),
+        }
+    }
+
+    pub fn with_policy(policy: Arc<SecurityPolicy>) -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .user_agent("rustflow-tools/0.1")
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("failed to build reqwest client"),
+            policy,
         }
     }
 }
@@ -127,9 +146,15 @@ impl Tool for HttpTool {
             }
         })?;
 
+        let url = reqwest::Url::parse(&params.url).map_err(|e| ToolError::InvalidInput {
+            name: "http".to_string(),
+            reason: format!("invalid URL '{}': {e}", params.url),
+        })?;
+        validate_http_target(&self.policy, &url).await?;
+
         debug!(url = %params.url, method = %params.method, "executing HTTP request");
 
-        let mut req = self.client.request(method, &params.url).timeout(timeout);
+        let mut req = self.client.request(method, url.clone()).timeout(timeout);
 
         for (key, val) in &params.headers {
             req = req.header(key, val);
@@ -139,7 +164,7 @@ impl Tool for HttpTool {
             req = req.json(&body);
         }
 
-        let response = req
+        let mut response = req
             .send()
             .await
             .map_err(|e| ToolError::Http(format!("request to '{}' failed: {e}", params.url)))?;
@@ -155,10 +180,19 @@ impl Tool for HttpTool {
             })
             .collect();
 
-        let body_bytes = response
-            .bytes()
-            .await
-            .map_err(|e| ToolError::Http(format!("failed to read response body: {e}")))?;
+        if let Some(len) = response.content_length() {
+            let len = usize::try_from(len).unwrap_or(usize::MAX);
+            self.policy
+                .network
+                .validate_http_response_size(len)
+                .map_err(|reason| ToolError::SecurityViolation {
+                    name: "http".into(),
+                    reason,
+                })?;
+        }
+
+        let body_bytes =
+            read_limited_body(&mut response, self.policy.network.max_http_response_size).await?;
 
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|_| {
             serde_json::Value::String(String::from_utf8_lossy(&body_bytes).to_string())
@@ -179,10 +213,126 @@ impl Tool for HttpTool {
     }
 }
 
+async fn validate_http_target(policy: &SecurityPolicy, url: &reqwest::Url) -> Result<()> {
+    match url.scheme() {
+        "http" | "https" => {}
+        scheme => {
+            return Err(ToolError::InvalidInput {
+                name: "http".into(),
+                reason: format!("unsupported URL scheme '{scheme}'"),
+            });
+        }
+    }
+
+    let host = url.host_str().ok_or_else(|| ToolError::InvalidInput {
+        name: "http".into(),
+        reason: "URL is missing a host".into(),
+    })?;
+    policy
+        .network
+        .validate_host(host)
+        .map_err(|reason| ToolError::SecurityViolation {
+            name: "http".into(),
+            reason,
+        })?;
+
+    if !policy.network.allow_local_targets {
+        if host.parse::<std::net::IpAddr>().is_err() {
+            let port = url
+                .port_or_known_default()
+                .ok_or_else(|| ToolError::InvalidInput {
+                    name: "http".into(),
+                    reason: format!(
+                        "URL '{}' is missing a port for scheme '{}'",
+                        url,
+                        url.scheme()
+                    ),
+                })?;
+            let addresses = tokio::net::lookup_host((host, port))
+                .await
+                .map_err(|e| ToolError::Http(format!("failed to resolve '{host}': {e}")))?;
+
+            for address in addresses {
+                policy.network.validate_ip(address.ip()).map_err(|reason| {
+                    ToolError::SecurityViolation {
+                        name: "http".into(),
+                        reason,
+                    }
+                })?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn read_limited_body(response: &mut reqwest::Response, max_size: usize) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| ToolError::Http(format!("failed to read response body: {e}")))?
+    {
+        let next_len =
+            body.len()
+                .checked_add(chunk.len())
+                .ok_or_else(|| ToolError::SecurityViolation {
+                    name: "http".into(),
+                    reason: "HTTP response size overflowed local limits".into(),
+                })?;
+        if next_len > max_size {
+            return Err(ToolError::SecurityViolation {
+                name: "http".into(),
+                reason: format!(
+                    "HTTP response size exceeds maximum allowed {} bytes",
+                    max_size
+                ),
+            });
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::security::NetworkPolicy;
     use crate::tool::Tool;
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn serve_once(body: &str) -> Option<String> {
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return None,
+            Err(e) => panic!("failed to bind test HTTP server: {e}"),
+        };
+        let addr = listener.local_addr().unwrap();
+        let body = body.to_string();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request_buf = [0_u8; 1024];
+            let _ = socket.read(&mut request_buf).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+        Some(format!("http://{addr}"))
+    }
+
+    fn local_http_tool(max_http_response_size: usize) -> HttpTool {
+        HttpTool::with_policy(Arc::new(SecurityPolicy {
+            network: NetworkPolicy {
+                allow_local_targets: true,
+                max_http_response_size,
+            },
+            ..Default::default()
+        }))
+    }
 
     #[test]
     fn test_http_tool_name() {
@@ -242,12 +392,37 @@ mod tests {
     async fn test_http_tool_connection_refused() {
         let tool = HttpTool::new();
         let ctx = Context::new();
-        // Use a port that's almost certainly not listening
+        let input = serde_json::json!({
+            "url": "http://127.0.0.1:19999",
+            "timeout_secs": 1
+        });
+        let err = tool.execute(input, &ctx).await.unwrap_err();
+        assert!(matches!(err, ToolError::SecurityViolation { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_http_tool_local_target_allowed_by_policy() {
+        let tool = local_http_tool(1024);
+        let ctx = Context::new();
         let input = serde_json::json!({
             "url": "http://127.0.0.1:19999",
             "timeout_secs": 1
         });
         let err = tool.execute(input, &ctx).await.unwrap_err();
         assert!(matches!(err, ToolError::Http(_)));
+    }
+
+    #[tokio::test]
+    async fn test_http_tool_response_size_limit() {
+        let tool = local_http_tool(5);
+        let ctx = Context::new();
+        let Some(url) = serve_once("too large").await else {
+            return;
+        };
+        let err = tool
+            .execute(serde_json::json!({"url": url, "timeout_secs": 1}), &ctx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::SecurityViolation { .. }));
     }
 }

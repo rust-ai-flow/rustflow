@@ -18,6 +18,10 @@ pub struct PlaygroundArgs {
     /// Do not open the browser automatically.
     #[arg(long)]
     pub no_open: bool,
+
+    /// Allow workflows run from the playground server to execute shell commands.
+    #[arg(long)]
+    pub allow_shell: bool,
 }
 
 /// Returns the playground directory: $RUSTFLOW_PLAYGROUND_DIR if set,
@@ -26,8 +30,7 @@ fn playground_dir() -> anyhow::Result<PathBuf> {
     if let Ok(dir) = std::env::var("RUSTFLOW_PLAYGROUND_DIR") {
         return Ok(PathBuf::from(dir));
     }
-    let home = std::env::var("HOME")
-        .map_err(|_| anyhow::anyhow!("$HOME is not set"))?;
+    let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("$HOME is not set"))?;
     Ok(PathBuf::from(home).join(".rustflow").join("playground"))
 }
 
@@ -44,7 +47,10 @@ pub async fn execute(args: PlaygroundArgs) -> anyhow::Result<()> {
              Re-run the installer or set RUSTFLOW_PLAYGROUND_DIR to the playground source directory.",
             pg_dir.display()
         );
-        return Err(anyhow::anyhow!("playground directory not found: {}", pg_dir.display()));
+        return Err(anyhow::anyhow!(
+            "playground directory not found: {}",
+            pg_dir.display()
+        ));
     }
 
     // Check if Node.js is installed
@@ -110,7 +116,7 @@ pub async fn execute(args: PlaygroundArgs) -> anyhow::Result<()> {
         });
     }
 
-    let state = rustflow_server::AppState::new();
+    let state = rustflow_server::AppState::with_shell_enabled(args.allow_shell);
     let router = rustflow_server::create_router(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 

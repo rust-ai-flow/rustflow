@@ -81,15 +81,14 @@ fn test_with_retry() {
         max_retries: 3,
         interval_ms: 1000,
     };
-    let step = Step::new_tool("s1", "S1", "http", serde_json::json!(null))
-        .with_retry(policy.clone());
+    let step =
+        Step::new_tool("s1", "S1", "http", serde_json::json!(null)).with_retry(policy.clone());
     assert_eq!(step.retry_policy, policy);
 }
 
 #[test]
 fn test_with_timeout_ms() {
-    let step =
-        Step::new_tool("s1", "S1", "http", serde_json::json!(null)).with_timeout_ms(5000);
+    let step = Step::new_tool("s1", "S1", "http", serde_json::json!(null)).with_timeout_ms(5000);
     assert_eq!(step.timeout_ms, Some(5000));
 }
 

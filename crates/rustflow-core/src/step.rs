@@ -174,7 +174,12 @@ mod tests {
 
     #[test]
     fn test_new_tool_step() {
-        let step = Step::new_tool("fetch", "Fetch Data", "http", serde_json::json!({"url": "https://example.com"}));
+        let step = Step::new_tool(
+            "fetch",
+            "Fetch Data",
+            "http",
+            serde_json::json!({"url": "https://example.com"}),
+        );
         assert_eq!(step.id.as_str(), "fetch");
         assert_eq!(step.name, "Fetch Data");
         assert!(matches!(step.kind, StepKind::Tool(_)));
@@ -217,15 +222,15 @@ mod tests {
             max_retries: 3,
             interval_ms: 1000,
         };
-        let step = Step::new_tool("s1", "S1", "http", serde_json::json!(null))
-            .with_retry(policy.clone());
+        let step =
+            Step::new_tool("s1", "S1", "http", serde_json::json!(null)).with_retry(policy.clone());
         assert_eq!(step.retry_policy, policy);
     }
 
     #[test]
     fn test_with_timeout_ms() {
-        let step = Step::new_tool("s1", "S1", "http", serde_json::json!(null))
-            .with_timeout_ms(5000);
+        let step =
+            Step::new_tool("s1", "S1", "http", serde_json::json!(null)).with_timeout_ms(5000);
         assert_eq!(step.timeout_ms, Some(5000));
     }
 
@@ -246,15 +251,20 @@ mod tests {
 
     #[test]
     fn test_step_serde_roundtrip() {
-        let step = Step::new_tool("fetch", "Fetch", "http", serde_json::json!({"url": "https://example.com"}))
-            .with_depends_on(vec![StepId::new("init")])
-            .with_retry(RetryPolicy::Exponential {
-                max_retries: 3,
-                initial_interval_ms: 100,
-                multiplier: 2.0,
-                max_interval_ms: 5000,
-            })
-            .with_timeout_ms(10000);
+        let step = Step::new_tool(
+            "fetch",
+            "Fetch",
+            "http",
+            serde_json::json!({"url": "https://example.com"}),
+        )
+        .with_depends_on(vec![StepId::new("init")])
+        .with_retry(RetryPolicy::Exponential {
+            max_retries: 3,
+            initial_interval_ms: 100,
+            multiplier: 2.0,
+            max_interval_ms: 5000,
+        })
+        .with_timeout_ms(10000);
 
         let json = serde_json::to_string(&step).unwrap();
         let deserialized: Step = serde_json::from_str(&json).unwrap();

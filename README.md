@@ -139,17 +139,17 @@ steps:
     retry:
       kind: exponential
       max_retries: 3
-      initial_ms: 1000
+      initial_interval_ms: 1000
 ```
 
 ### Run
 
 ```bash
 # Execute a workflow
-rustflow run research.yaml --vars '{"url":"https://example.com"}'
+rustflow run research.yaml --var url=https://example.com
 
 # Watch for file changes and re-run automatically
-rustflow dev research.yaml --vars '{"url":"https://example.com"}'
+rustflow dev research.yaml --var url=https://example.com
 
 # Start the API server
 rustflow serve
@@ -193,6 +193,19 @@ rustflow <command> [options]
 ```
 
 All steps update in-place — no scrolling noise.
+
+### Safety Defaults
+
+Shell execution is disabled by default for the CLI, server, and playground. Use `--allow-shell` only for workflows you trust:
+
+```bash
+rustflow run workflow.yaml --allow-shell
+rustflow dev workflow.yaml --allow-shell
+rustflow serve --allow-shell
+rustflow playground --allow-shell
+```
+
+File tools are sandboxed to the current working directory unless a custom `SecurityPolicy` supplies explicit `allowed_dirs`.
 
 ### `rustflow doctor`
 
@@ -412,7 +425,7 @@ retry:
 retry:
   kind: exponential
   max_retries: 5
-  initial_ms: 500
+  initial_interval_ms: 500
   multiplier: 2.0      # 500 → 1000 → 2000 → 4000 ms
   max_interval_ms: 30000
 ```

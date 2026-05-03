@@ -11,6 +11,10 @@ pub struct ServeArgs {
     /// Port to listen on.
     #[arg(short, long, default_value = "18790")]
     pub port: u16,
+
+    /// Allow workflows served by this process to execute shell commands.
+    #[arg(long)]
+    pub allow_shell: bool,
 }
 
 pub async fn execute(args: ServeArgs) -> anyhow::Result<()> {
@@ -34,7 +38,7 @@ pub async fn execute(args: ServeArgs) -> anyhow::Result<()> {
     println!("  {}", "Press Ctrl+C to stop.".dark_grey());
     println!();
 
-    let state = rustflow_server::AppState::new();
+    let state = rustflow_server::AppState::with_shell_enabled(args.allow_shell);
     let router = rustflow_server::create_router(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 

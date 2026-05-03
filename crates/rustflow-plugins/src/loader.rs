@@ -235,7 +235,9 @@ mod tests {
     #[test]
     fn test_file_not_found() {
         let mut loader = PluginLoader::new();
-        let err = loader.load_file("/nonexistent/path/plugin.wasm").unwrap_err();
+        let err = loader
+            .load_file("/nonexistent/path/plugin.wasm")
+            .unwrap_err();
         assert!(matches!(err, PluginError::NotFound { .. }));
     }
 
@@ -246,13 +248,10 @@ mod tests {
         let tool = &tools[0];
 
         let ctx = rustflow_core::context::Context::new();
-        let result = rustflow_tools::tool::Tool::execute(
-            tool,
-            serde_json::json!({"name": "World"}),
-            &ctx,
-        )
-        .await
-        .expect("execute failed");
+        let result =
+            rustflow_tools::tool::Tool::execute(tool, serde_json::json!({"name": "World"}), &ctx)
+                .await
+                .expect("execute failed");
 
         assert_eq!(result.inner()["greeting"], "hello!");
     }
