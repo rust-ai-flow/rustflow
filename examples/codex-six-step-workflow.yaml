@@ -1,0 +1,120 @@
+name: codex-six-step-analysis
+description: >
+  Six-step workflow using the local Codex CLI provider. It turns a short product
+  brief into a compact research-style report through multiple dependent LLM steps.
+
+steps:
+  - id: brief
+    name: 1. Clarify Product Brief
+    llm:
+      provider: codex
+      model: default
+      prompt: |
+        You are analyzing this product idea:
+        "RustFlow is a high-performance Rust runtime for orchestrating AI-agent workflows."
+
+        In 3 concise bullets, clarify:
+        - target user
+        - core job-to-be-done
+        - strongest technical promise
+    timeout_ms: 120000
+
+  - id: audience
+    name: 2. Identify Audience Segments
+    llm:
+      provider: codex
+      model: default
+      prompt: |
+        Based on this clarified brief:
+        {{steps.brief.output}}
+
+        List 3 likely audience segments. For each, give:
+        - what they care about
+        - what would make them skeptical
+    depends_on:
+      - brief
+    timeout_ms: 120000
+
+  - id: differentiation
+    name: 3. Extract Differentiation
+    llm:
+      provider: codex
+      model: default
+      prompt: |
+        Brief:
+        {{steps.brief.output}}
+
+        Audience:
+        {{steps.audience.output}}
+
+        Extract 4 concrete differentiators versus Python-first agent frameworks.
+        Keep each differentiator falsifiable, not marketing fluff.
+    depends_on:
+      - audience
+    timeout_ms: 120000
+
+  - id: risks
+    name: 4. Surface Risks
+    llm:
+      provider: codex
+      model: default
+      prompt: |
+        Product positioning so far:
+        {{steps.differentiation.output}}
+
+        Identify 4 risks or weak points in this positioning.
+        For each, include one mitigation.
+    depends_on:
+      - differentiation
+    timeout_ms: 120000
+
+  - id: plan
+    name: 5. Build Action Plan
+    llm:
+      provider: codex
+      model: default
+      prompt: |
+        Differentiation:
+        {{steps.differentiation.output}}
+
+        Risks:
+        {{steps.risks.output}}
+
+        Produce a 5-item action plan for the next product demo.
+        Each item should be observable in the demo, not an internal TODO.
+    depends_on:
+      - risks
+    timeout_ms: 120000
+
+  - id: report
+    name: 6. Final Report
+    llm:
+      provider: codex
+      model: default
+      prompt: |
+        Combine the following into a concise final report:
+
+        Clarified brief:
+        {{steps.brief.output}}
+
+        Audience:
+        {{steps.audience.output}}
+
+        Differentiation:
+        {{steps.differentiation.output}}
+
+        Risks:
+        {{steps.risks.output}}
+
+        Action plan:
+        {{steps.plan.output}}
+
+        Output exactly these sections:
+        1. Positioning
+        2. Best audience
+        3. Demo narrative
+        4. Risks to mention honestly
+        5. Next actions
+    depends_on:
+      - plan
+    timeout_ms: 120000

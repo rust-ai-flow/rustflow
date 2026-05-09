@@ -12,6 +12,7 @@ use rustflow_core::types::Value;
 use rustflow_core::workflow::WorkflowDef;
 use rustflow_llm::LlmGateway;
 use rustflow_llm::providers::anthropic::AnthropicProvider;
+use rustflow_llm::providers::codex::CodexProvider;
 use rustflow_llm::providers::glm::GlmProvider;
 use rustflow_llm::providers::ollama::OllamaProvider;
 use rustflow_llm::providers::openai::OpenAiProvider;
@@ -86,6 +87,9 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
     // Ollama is always available (local, no API key needed).
     gateway.register(OllamaProvider::default());
     info!("registered Ollama provider");
+    // Codex CLI is the auth boundary; the provider never reads Codex tokens.
+    gateway.register(CodexProvider::default());
+    info!("registered Codex provider");
 
     // 3. Set up security policy and tool registry.
     let policy = Arc::new(SecurityPolicy {
