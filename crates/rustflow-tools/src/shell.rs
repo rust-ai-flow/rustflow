@@ -178,10 +178,10 @@ impl Tool for ShellTool {
         // only policy-approved parent keys plus allowed user-provided keys.
         cmd.env_clear();
         for key in &self.policy.shell.inherited_env_keys {
-            if self.policy.shell.can_inherit_env_key(key) {
-                if let Ok(value) = std::env::var(key) {
-                    cmd.env(key, value);
-                }
+            if self.policy.shell.can_inherit_env_key(key)
+                && let Ok(value) = std::env::var(key)
+            {
+                cmd.env(key, value);
             }
         }
         for (key, val) in &params.env {

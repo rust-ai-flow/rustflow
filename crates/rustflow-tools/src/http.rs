@@ -236,30 +236,28 @@ async fn validate_http_target(policy: &SecurityPolicy, url: &reqwest::Url) -> Re
             reason,
         })?;
 
-    if !policy.network.allow_local_targets {
-        if host.parse::<std::net::IpAddr>().is_err() {
-            let port = url
-                .port_or_known_default()
-                .ok_or_else(|| ToolError::InvalidInput {
-                    name: "http".into(),
-                    reason: format!(
-                        "URL '{}' is missing a port for scheme '{}'",
-                        url,
-                        url.scheme()
-                    ),
-                })?;
-            let addresses = tokio::net::lookup_host((host, port))
-                .await
-                .map_err(|e| ToolError::Http(format!("failed to resolve '{host}': {e}")))?;
+    if !policy.network.allow_local_targets && host.parse::<std::net::IpAddr>().is_err() {
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| ToolError::InvalidInput {
+                name: "http".into(),
+                reason: format!(
+                    "URL '{}' is missing a port for scheme '{}'",
+                    url,
+                    url.scheme()
+                ),
+            })?;
+        let addresses = tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|e| ToolError::Http(format!("failed to resolve '{host}': {e}")))?;
 
-            for address in addresses {
-                policy.network.validate_ip(address.ip()).map_err(|reason| {
-                    ToolError::SecurityViolation {
-                        name: "http".into(),
-                        reason,
-                    }
-                })?;
-            }
+        for address in addresses {
+            policy.network.validate_ip(address.ip()).map_err(|reason| {
+                ToolError::SecurityViolation {
+                    name: "http".into(),
+                    reason,
+                }
+            })?;
         }
     }
 

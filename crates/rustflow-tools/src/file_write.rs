@@ -127,17 +127,16 @@ impl Tool for FileWriteTool {
             })?;
 
         // Create parent directories if requested.
-        if params.mkdir {
-            if let Some(parent) = validated_path.parent() {
-                if !parent.as_os_str().is_empty() {
-                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                        ToolError::ExecutionFailed {
-                            name: "file_write".into(),
-                            reason: format!("failed to create directories: {e}"),
-                        }
-                    })?;
-                }
-            }
+        if params.mkdir
+            && let Some(parent) = validated_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed {
+                    name: "file_write".into(),
+                    reason: format!("failed to create directories: {e}"),
+                })?;
         }
 
         if params.append {
