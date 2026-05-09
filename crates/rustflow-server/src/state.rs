@@ -19,19 +19,25 @@ const RUN_BROADCAST_CAPACITY: usize = 1024;
 /// In-memory record of an active or completed workflow run.
 /// Stored in `AppState::runs`, keyed by agent ID.
 pub struct RunRecord {
+    /// Stable identifier for this execution. Changes when a completed agent run
+    /// is replaced by a new `/stream` request.
+    pub run_id: String,
+    /// Next zero-based sequence number to assign within this run.
+    pub next_seq: u64,
     /// All events emitted so far (including the terminal event once `done`).
-    pub events: Vec<crate::ws::WsEvent>,
+    pub events: Vec<crate::ws::WsEventEnvelope>,
     /// Broadcast channel — subscribers receive events emitted after they subscribe.
-    pub sender: broadcast::Sender<crate::ws::WsEvent>,
+    pub sender: broadcast::Sender<crate::ws::WsEventEnvelope>,
     /// True once `workflow_completed` or `workflow_failed` has been appended.
     pub done: bool,
 }
 
 /// Snapshot plus live subscription for an active or recently completed run.
 pub struct RunSubscription {
-    pub events: Vec<crate::ws::WsEvent>,
+    pub run_id: String,
+    pub events: Vec<crate::ws::WsEventEnvelope>,
     pub done: bool,
-    pub receiver: broadcast::Receiver<crate::ws::WsEvent>,
+    pub receiver: broadcast::Receiver<crate::ws::WsEventEnvelope>,
 }
 
 /// Result of asking `/stream` to start execution.
@@ -155,13 +161,7 @@ impl AppState {
     /// Create a fresh `RunRecord` for the given agent, replacing any prior one.
     /// Must be called before the scheduler starts emitting events.
     pub async fn create_run(&self, agent_id: String) {
-        let (tx, _) = broadcast::channel(RUN_BROADCAST_CAPACITY);
-        let record = RunRecord {
-            events: vec![],
-            sender: tx,
-            done: false,
-        };
-        self.runs.write().await.insert(agent_id, record);
+        self.runs.write().await.insert(agent_id, new_run_record());
     }
 
     /// Start a new run if none is active, otherwise subscribe to the active run.
@@ -176,21 +176,14 @@ impl AppState {
             .unwrap_or(true);
 
         if should_start {
-            let (tx, _) = broadcast::channel(RUN_BROADCAST_CAPACITY);
-            store.insert(
-                agent_id.clone(),
-                RunRecord {
-                    events: vec![],
-                    sender: tx,
-                    done: false,
-                },
-            );
+            store.insert(agent_id.clone(), new_run_record());
         }
 
         let record = store
             .get(&agent_id)
             .expect("run record exists after start_or_observe_run");
         let subscription = RunSubscription {
+            run_id: record.run_id.clone(),
             events: record.events.clone(),
             done: record.done,
             receiver: record.sender.subscribe(),
@@ -211,6 +204,7 @@ impl AppState {
         let store = self.runs.read().await;
         let record = store.get(agent_id)?;
         Some(RunSubscription {
+            run_id: record.run_id.clone(),
             events: record.events.clone(),
             done: record.done,
             receiver: record.sender.subscribe(),
@@ -221,8 +215,11 @@ impl AppState {
     pub async fn emit_run_event(&self, agent_id: &str, event: crate::ws::WsEvent) {
         let mut store = self.runs.write().await;
         if let Some(record) = store.get_mut(agent_id) {
-            let _ = record.sender.send(event.clone());
-            record.events.push(event);
+            let envelope =
+                crate::ws::WsEventEnvelope::new(record.run_id.clone(), record.next_seq, event);
+            record.next_seq += 1;
+            let _ = record.sender.send(envelope.clone());
+            record.events.push(envelope);
         }
     }
 
@@ -230,10 +227,24 @@ impl AppState {
     pub async fn finish_run(&self, agent_id: &str, terminal: crate::ws::WsEvent) {
         let mut store = self.runs.write().await;
         if let Some(record) = store.get_mut(agent_id) {
-            let _ = record.sender.send(terminal.clone());
-            record.events.push(terminal);
+            let envelope =
+                crate::ws::WsEventEnvelope::new(record.run_id.clone(), record.next_seq, terminal);
+            record.next_seq += 1;
+            let _ = record.sender.send(envelope.clone());
+            record.events.push(envelope);
             record.done = true;
         }
+    }
+}
+
+fn new_run_record() -> RunRecord {
+    let (tx, _) = broadcast::channel(RUN_BROADCAST_CAPACITY);
+    RunRecord {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        next_seq: 0,
+        events: vec![],
+        sender: tx,
+        done: false,
     }
 }
 
@@ -256,6 +267,7 @@ mod tests {
 
         match result {
             RunStart::Started(subscription) => {
+                assert!(!subscription.run_id.is_empty());
                 assert!(subscription.events.is_empty());
                 assert!(!subscription.done);
             }
@@ -282,6 +294,8 @@ mod tests {
         match result {
             RunStart::Existing(subscription) => {
                 assert_eq!(subscription.events.len(), 1);
+                assert_eq!(subscription.events[0].run_id, subscription.run_id);
+                assert_eq!(subscription.events[0].seq, 0);
                 assert!(!subscription.done);
             }
             RunStart::Started(_) => panic!("active run should be observed"),
@@ -304,9 +318,13 @@ mod tests {
         let subscription = state.observe_run("agent-1").await.unwrap();
 
         assert!(subscription.done);
+        assert_eq!(subscription.events.len(), 1);
+        let event = &subscription.events[0];
+        assert_eq!(event.run_id, subscription.run_id);
+        assert_eq!(event.seq, 0);
         assert!(matches!(
-            subscription.events.as_slice(),
-            [WsEvent::WorkflowFailed { error }] if error == "boom"
+            &event.event,
+            WsEvent::WorkflowFailed { error } if error == "boom"
         ));
     }
 
@@ -327,10 +345,90 @@ mod tests {
 
         match result {
             RunStart::Started(subscription) => {
+                assert!(!subscription.run_id.is_empty());
                 assert!(subscription.events.is_empty());
                 assert!(!subscription.done);
             }
             RunStart::Existing(_) => panic!("completed run should be replaced for a new stream"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_run_events_keep_run_id_and_monotonic_sequence_for_replay_and_live() {
+        let state = AppState::new();
+        let result = state.start_or_observe_run("agent-1".to_string()).await;
+        let mut live_receiver = match result {
+            RunStart::Started(subscription) => subscription.receiver,
+            RunStart::Existing(_) => panic!("missing run should be started"),
+        };
+
+        state
+            .emit_run_event(
+                "agent-1",
+                WsEvent::StepStarted {
+                    step_id: "a".to_string(),
+                    step_name: "A".to_string(),
+                },
+            )
+            .await;
+        state
+            .finish_run(
+                "agent-1",
+                WsEvent::WorkflowCompleted {
+                    outputs: serde_json::json!({ "a": "done" }),
+                },
+            )
+            .await;
+
+        let first_live = live_receiver.recv().await.unwrap();
+        let second_live = live_receiver.recv().await.unwrap();
+        assert_eq!(first_live.seq, 0);
+        assert_eq!(second_live.seq, 1);
+        assert_eq!(first_live.run_id, second_live.run_id);
+
+        let replay = state.observe_run("agent-1").await.unwrap();
+        assert!(replay.done);
+        assert_eq!(replay.events.len(), 2);
+        assert_eq!(replay.events[0].run_id, first_live.run_id);
+        assert_eq!(replay.events[0].seq, 0);
+        assert_eq!(replay.events[1].run_id, first_live.run_id);
+        assert_eq!(replay.events[1].seq, 1);
+    }
+
+    #[tokio::test]
+    async fn test_new_stream_after_completed_run_gets_new_run_id_and_resets_sequence() {
+        let state = AppState::new();
+        let first_run_id = match state.start_or_observe_run("agent-1".to_string()).await {
+            RunStart::Started(subscription) => subscription.run_id,
+            RunStart::Existing(_) => panic!("missing run should be started"),
+        };
+        state
+            .finish_run(
+                "agent-1",
+                WsEvent::WorkflowCompleted {
+                    outputs: serde_json::json!({ "a": "done" }),
+                },
+            )
+            .await;
+
+        let second_run_id = match state.start_or_observe_run("agent-1".to_string()).await {
+            RunStart::Started(subscription) => subscription.run_id,
+            RunStart::Existing(_) => panic!("completed run should be replaced"),
+        };
+        state
+            .emit_run_event(
+                "agent-1",
+                WsEvent::StepStarted {
+                    step_id: "b".to_string(),
+                    step_name: "B".to_string(),
+                },
+            )
+            .await;
+
+        let replay = state.observe_run("agent-1").await.unwrap();
+        assert_ne!(first_run_id, second_run_id);
+        assert_eq!(replay.events.len(), 1);
+        assert_eq!(replay.events[0].run_id, second_run_id);
+        assert_eq!(replay.events[0].seq, 0);
     }
 }

@@ -24,16 +24,13 @@
 //!    ```
 //!    `vars` is used only by `/stream` when starting a new run; `/observe`
 //!    ignores it.
-//! 3. Server streams event frames:
+//! 3. Server streams event frames. Each frame is wrapped in a run envelope;
+//!    `seq` starts at `0` for each run and increases by one for every event,
+//!    including the terminal event.
 //!    ```json
-//!    {"type":"step_started",    "step_id":"…","step_name":"…"}
-//!    {"type":"step_succeeded",  "step_id":"…","elapsed_ms":820,"output":{…}}
-//!    {"type":"step_failed",     "step_id":"…","error":"…","will_retry":true,"attempt":1,"elapsed_ms":12}
-//!    {"type":"step_retrying",   "step_id":"…","attempt":2}
-//!    {"type":"circuit_breaker_opened","resource":"ollama"}
-//!    {"type":"circuit_breaker_closed","resource":"ollama"}
-//!    {"type":"workflow_completed","outputs":{…}}
-//!    {"type":"workflow_failed","error":"…"}
+//!    {"run_id":"…","seq":0,"event":{"type":"step_started","step_id":"…","step_name":"…"}}
+//!    {"run_id":"…","seq":1,"event":{"type":"step_succeeded","step_id":"…","elapsed_ms":820,"output":{…}}}
+//!    {"run_id":"…","seq":2,"event":{"type":"workflow_completed","outputs":{…}}}
 //!    ```
 //! 4. Server closes the connection after `workflow_completed` or
 //!    `workflow_failed`.
@@ -55,9 +52,53 @@ use rustflow_orchestrator::{DefaultStepExecutor, Scheduler, SchedulerEvent};
 
 use crate::state::{AppState, RunStart};
 
-// ── WsEvent ───────────────────────────────────────────────────────────────────
+// ── WsEventEnvelope ──────────────────────────────────────────────────────────
 
 /// JSON frame sent from the server to a connected client.
+///
+/// `seq` is zero-based and monotonic within a single `run_id`. The nested
+/// `event` field is the protocol envelope; event payload fields are also
+/// mirrored at the top level for older event-shaped clients.
+#[derive(Debug, Clone)]
+pub struct WsEventEnvelope {
+    pub run_id: String,
+    pub seq: u64,
+    pub event: WsEvent,
+}
+
+impl WsEventEnvelope {
+    pub fn new(run_id: String, seq: u64, event: WsEvent) -> Self {
+        Self { run_id, seq, event }
+    }
+}
+
+impl Serialize for WsEventEnvelope {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct WireEnvelope<'a> {
+            run_id: &'a str,
+            seq: u64,
+            event: &'a WsEvent,
+            #[serde(flatten)]
+            legacy_event_fields: &'a WsEvent,
+        }
+
+        WireEnvelope {
+            run_id: &self.run_id,
+            seq: self.seq,
+            event: &self.event,
+            legacy_event_fields: &self.event,
+        }
+        .serialize(serializer)
+    }
+}
+
+// ── WsEvent ───────────────────────────────────────────────────────────────────
+
+/// Event payload nested inside a [`WsEventEnvelope`].
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsEvent {
@@ -213,9 +254,13 @@ async fn run_socket(
         match state.observe_run(&id).await {
             Some(subscription) => subscription,
             None => {
-                let msg = serde_json::to_string(&WsEvent::WorkflowFailed {
-                    error: format!("no run found for agent '{id}'"),
-                })?;
+                let msg = serde_json::to_string(&WsEventEnvelope::new(
+                    uuid::Uuid::new_v4().to_string(),
+                    0,
+                    WsEvent::WorkflowFailed {
+                        error: format!("no run found for agent '{id}'"),
+                    },
+                ))?;
                 let _ = socket.send(Message::Text(msg.into())).await;
                 return Ok(());
             }
@@ -334,9 +379,9 @@ async fn run_workflow_bg(
 /// terminates or the client disconnects.
 async fn forward_to_socket(
     mut socket: WebSocket,
-    past: Vec<WsEvent>,
+    past: Vec<WsEventEnvelope>,
     done: bool,
-    mut rx: broadcast::Receiver<WsEvent>,
+    mut rx: broadcast::Receiver<WsEventEnvelope>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Replay buffered events.
     for event in &past {
@@ -359,7 +404,7 @@ async fn forward_to_socket(
                 match result {
                     Ok(event) => {
                         let is_terminal = matches!(
-                            event,
+                            &event.event,
                             WsEvent::WorkflowCompleted { .. } | WsEvent::WorkflowFailed { .. }
                         );
                         let msg = serde_json::to_string(&event)?;
@@ -485,6 +530,27 @@ mod tests {
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "circuit_breaker_opened");
         assert_eq!(json["resource"], "ollama");
+    }
+
+    #[test]
+    fn test_ws_event_envelope_serializes_event_payload() {
+        let envelope = WsEventEnvelope::new(
+            "run-1".to_string(),
+            0,
+            WsEvent::StepStarted {
+                step_id: "fetch".to_string(),
+                step_name: "Fetch Data".to_string(),
+            },
+        );
+
+        let json = serde_json::to_value(&envelope).unwrap();
+
+        assert_eq!(json["run_id"], "run-1");
+        assert_eq!(json["seq"], 0);
+        assert_eq!(json["event"]["type"], "step_started");
+        assert_eq!(json["event"]["step_id"], "fetch");
+        assert_eq!(json["type"], "step_started");
+        assert_eq!(json["step_id"], "fetch");
     }
 
     #[test]
