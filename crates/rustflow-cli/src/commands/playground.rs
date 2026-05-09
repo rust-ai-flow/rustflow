@@ -116,7 +116,10 @@ pub async fn execute(args: PlaygroundArgs) -> anyhow::Result<()> {
         });
     }
 
-    let state = rustflow_server::AppState::with_shell_enabled(args.allow_shell);
+    let state = rustflow_server::AppState::with_shell_enabled_and_run_store_path(
+        args.allow_shell,
+        rustflow_server::AppState::default_run_store_path(),
+    );
     let router = rustflow_server::create_router(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 

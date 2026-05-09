@@ -13,7 +13,13 @@
 //!
 //! Attach to an existing active or completed run as a read-only observer.
 //! Replays all events emitted so far, then streams live events until the
-//! workflow finishes. Returns `workflow_failed` immediately if no run exists.
+//! workflow finishes. Completed/recent run records may also be recovered from
+//! the local run store after restart. Returns `workflow_failed` immediately if
+//! no run exists.
+//!
+//! Persistent replay is local-disk best effort only. It does not provide
+//! crash-atomic distributed durable execution, and active workflow execution is
+//! not resumed after a restart.
 //!
 //! # Protocol
 //!
@@ -59,7 +65,7 @@ use crate::state::{AppState, RunStart};
 /// `seq` is zero-based and monotonic within a single `run_id`. The nested
 /// `event` field is the protocol envelope; event payload fields are also
 /// mirrored at the top level for older event-shaped clients.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct WsEventEnvelope {
     pub run_id: String,
     pub seq: u64,
@@ -99,7 +105,7 @@ impl Serialize for WsEventEnvelope {
 // ── WsEvent ───────────────────────────────────────────────────────────────────
 
 /// Event payload nested inside a [`WsEventEnvelope`].
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WsEvent {
     StepStarted {

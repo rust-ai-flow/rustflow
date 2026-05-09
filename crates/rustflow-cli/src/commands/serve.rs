@@ -34,11 +34,15 @@ pub async fn execute(args: ServeArgs) -> anyhow::Result<()> {
     println!("  {}  {:<8} /agents/:id", "·".dark_grey(), "DELETE");
     println!("  {}  {:<8} /agents/:id/run", "·".dark_grey(), "POST");
     println!("  {}  {:<8} /agents/:id/stream", "·".dark_grey(), "WS");
+    println!("  {}  {:<8} /agents/:id/observe", "·".dark_grey(), "WS");
     println!();
     println!("  {}", "Press Ctrl+C to stop.".dark_grey());
     println!();
 
-    let state = rustflow_server::AppState::with_shell_enabled(args.allow_shell);
+    let state = rustflow_server::AppState::with_shell_enabled_and_run_store_path(
+        args.allow_shell,
+        rustflow_server::AppState::default_run_store_path(),
+    );
     let router = rustflow_server::create_router(state);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
