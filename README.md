@@ -158,6 +158,19 @@ rustflow serve
 rustflow playground
 ```
 
+### Codex CLI Provider
+
+Workflows can use the local Codex CLI without adding API keys to RustFlow:
+
+```yaml
+llm:
+  provider: codex
+  model: default   # or a Codex-supported model such as gpt-5.5
+  prompt: "Explain Rust ownership in three bullet points."
+```
+
+RustFlow invokes `codex exec` non-interactively and captures stdout as the response. Codex CLI remains the authentication boundary: RustFlow never reads, copies, logs, or persists Codex auth tokens. The executable defaults to `codex`; set `RUSTFLOW_CODEX_BIN` to use a custom path.
+
 ---
 
 ## CLI
@@ -507,7 +520,7 @@ cargo run -- playground         # Start server + open Playground
 - [x] Core type system (Agent, Step, Context, RetryPolicy)
 - [x] DAG parser with topological sort and cycle detection
 - [x] Async concurrent scheduler with event callbacks
-- [x] Multi-provider LLM gateway (OpenAI, Anthropic, Ollama)
+- [x] Multi-provider LLM gateway (OpenAI, Anthropic, Ollama, GLM, Codex CLI)
 - [x] 7 built-in tools (http, file_read, file_write, shell, json_extract, env, sleep)
 - [x] YAML workflow definition and loading
 - [x] HTTP API server (Agent CRUD + execution)

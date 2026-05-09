@@ -1,0 +1,14 @@
+name: codex-hello
+description: >
+  Minimal workflow using the local Codex CLI as an LLM provider.
+  Requires `codex` to be installed and logged in locally.
+
+steps:
+  - id: answer
+    name: Answer with Codex
+    llm:
+      provider: codex
+      model: default
+      prompt: |
+        Explain Rust ownership in three concise bullet points.
+    timeout_ms: 120000

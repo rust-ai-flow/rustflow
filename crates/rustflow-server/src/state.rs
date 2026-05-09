@@ -8,7 +8,10 @@ use tracing::warn;
 use rustflow_core::agent::Agent;
 use rustflow_core::circuit_breaker::CircuitBreakerRegistry;
 use rustflow_core::types::AgentId;
-use rustflow_llm::{LlmGateway, providers::glm::GlmProvider, providers::ollama::OllamaProvider};
+use rustflow_llm::{
+    LlmGateway, providers::codex::CodexProvider, providers::glm::GlmProvider,
+    providers::ollama::OllamaProvider,
+};
 use rustflow_tools::security::{SecurityPolicy, ShellPolicy};
 use rustflow_tools::{
     EnvTool, FileReadTool, FileWriteTool, HttpTool, JsonExtractTool, ShellTool, SleepTool,
@@ -137,6 +140,7 @@ impl AppState {
 
         let mut llm_gateway = LlmGateway::new();
         llm_gateway.register(OllamaProvider::new());
+        llm_gateway.register(CodexProvider::default());
         if std::env::var("GLM_API_KEY").is_ok() {
             llm_gateway.register(GlmProvider::from_env());
         }
@@ -558,6 +562,13 @@ mod tests {
 
     fn temp_run_store_path() -> PathBuf {
         std::env::temp_dir().join(format!("rustflow-run-store-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn test_default_llm_gateway_includes_codex_provider() {
+        let state = AppState::new();
+
+        assert!(state.llm_gateway.providers().contains(&"codex"));
     }
 
     #[tokio::test]

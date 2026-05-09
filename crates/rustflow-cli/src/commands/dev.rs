@@ -12,6 +12,7 @@ use rustflow_core::context::Context;
 use rustflow_core::workflow::WorkflowDef;
 use rustflow_llm::LlmGateway;
 use rustflow_llm::providers::anthropic::AnthropicProvider;
+use rustflow_llm::providers::codex::CodexProvider;
 use rustflow_llm::providers::glm::GlmProvider;
 use rustflow_llm::providers::ollama::OllamaProvider;
 use rustflow_llm::providers::openai::OpenAiProvider;
@@ -140,6 +141,8 @@ async fn run_workflow(file: &Path, raw_vars: &[String], allow_shell: bool) {
         info!("registered GLM provider");
     }
     gateway.register(OllamaProvider::default());
+    gateway.register(CodexProvider::default());
+    info!("registered Codex provider");
 
     // Tool registry.
     let policy = Arc::new(SecurityPolicy {
