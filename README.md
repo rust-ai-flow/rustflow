@@ -207,6 +207,8 @@ rustflow playground --allow-shell
 
 File tools are sandboxed to the current working directory unless a custom `SecurityPolicy` supplies explicit `allowed_dirs`.
 
+See [docs/security.md](docs/security.md) for the current file, network, shell, environment, and WASM plugin boundaries.
+
 ### `rustflow doctor`
 
 ```

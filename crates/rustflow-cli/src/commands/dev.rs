@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -89,12 +89,12 @@ pub async fn execute(args: DevArgs) -> anyhow::Result<()> {
 }
 
 /// Return the last-modified time of a file, or None if it can't be read.
-fn mtime(path: &PathBuf) -> Option<SystemTime> {
+fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok()?.modified().ok()
 }
 
 /// Load, build, and execute a workflow, printing live progress.
-async fn run_workflow(file: &PathBuf, raw_vars: &[String], allow_shell: bool) {
+async fn run_workflow(file: &Path, raw_vars: &[String], allow_shell: bool) {
     println!(
         "  {}  {}",
         "▶".cyan(),

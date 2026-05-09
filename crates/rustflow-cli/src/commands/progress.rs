@@ -373,7 +373,7 @@ impl LiveProgress {
 
         let name_styled = match sd.state {
             StepState::Running => format!("{}", sd.name.clone().bold()),
-            StepState::Success => format!("{}", sd.name.clone()),
+            StepState::Success => sd.name.clone(),
             StepState::Failed => format!("{}", sd.name.clone().red()),
             _ => format!("{}", sd.name.clone().dark_grey()),
         };
