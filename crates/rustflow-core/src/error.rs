@@ -122,7 +122,10 @@ mod tests {
     #[test]
     fn test_result_type_alias() {
         let ok: Result<i32> = Ok(42);
-        assert_eq!(ok.unwrap(), 42);
+        let Ok(value) = ok else {
+            panic!("expected Ok result");
+        };
+        assert_eq!(value, 42);
 
         let err: Result<i32> = Err(RustFlowError::timeout("slow"));
         assert!(err.is_err());

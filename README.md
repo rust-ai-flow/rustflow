@@ -270,24 +270,37 @@ Connect, send the start message, receive events:
 // Client → Server (once, on connect)
 { "vars": { "url": "https://example.com" } }
 
-// Server → Client (streamed)
-{"type":"step_started",   "step_id":"fetch","step_name":"Fetch Page"}
-{"type":"step_succeeded", "step_id":"fetch","step_name":"Fetch Page","elapsed_ms":342,"output":{…}}
-{"type":"step_started",   "step_id":"summarize","step_name":"Summarize"}
-{"type":"step_retrying",  "step_id":"summarize","step_name":"Summarize","attempt":2}
-{"type":"step_succeeded", "step_id":"summarize","elapsed_ms":4100,"output":"…"}
-{"type":"workflow_completed","outputs":{"fetch":{…},"summarize":"…"}}
+// Server → Client (streamed envelopes)
+{"run_id":"018f2f1f-9a7a-4b46-8f1a-1e3a8fd083b2","seq":0,"event":{"type":"step_started","step_id":"fetch","step_name":"Fetch Page"}}
+{"run_id":"018f2f1f-9a7a-4b46-8f1a-1e3a8fd083b2","seq":1,"event":{"type":"step_succeeded","step_id":"fetch","step_name":"Fetch Page","elapsed_ms":342,"output":{…}}}
+{"run_id":"018f2f1f-9a7a-4b46-8f1a-1e3a8fd083b2","seq":2,"event":{"type":"step_started","step_id":"summarize","step_name":"Summarize"}}
+{"run_id":"018f2f1f-9a7a-4b46-8f1a-1e3a8fd083b2","seq":3,"event":{"type":"step_retrying","step_id":"summarize","step_name":"Summarize","attempt":2}}
+{"run_id":"018f2f1f-9a7a-4b46-8f1a-1e3a8fd083b2","seq":4,"event":{"type":"step_succeeded","step_id":"summarize","step_name":"Summarize","elapsed_ms":4100,"output":"…"}}
+{"run_id":"018f2f1f-9a7a-4b46-8f1a-1e3a8fd083b2","seq":5,"event":{"type":"workflow_completed","outputs":{"fetch":{…},"summarize":"…"}}}
 ```
 
 If a run is already active for this agent, the new connection attaches as an observer — **no duplicate execution is started**.
+The attached client receives the same `run_id` as the original run. When a completed agent is started again with `/stream`, the new execution gets a new `run_id` and its `seq` starts again at `0`.
 
 #### `/agents/{id}/observe` — Reconnect to an ongoing run
 
-Same event protocol as `/stream`. Replays all events emitted so far, then streams live until the workflow finishes. If no active run exists, returns `workflow_failed` immediately.
+Same envelope protocol as `/stream`. Replays all events currently held in memory for the agent run, then streams live until the workflow finishes. If no active or completed in-memory run exists, returns `workflow_failed` immediately.
 
 ```
 Use this endpoint to reconnect after a page refresh or network drop.
 ```
+
+Replay is currently process-local and in-memory only. It does not recover events after a server restart, and clients cannot yet request replay from a specific `seq` offset.
+
+**Envelope fields:**
+
+| Field | Description |
+|---|---|
+| `run_id` | Stable UUID for one execution; changes when a new `/stream` run starts for the same agent |
+| `seq` | Zero-based, monotonically increasing event sequence within the run, including terminal events |
+| `event` | Existing WebSocket event payload |
+
+For compatibility with existing event-shaped clients, the current server also mirrors the `event` payload fields at the top level of each frame. New protocol consumers should read from `event`.
 
 **Event types:**
 

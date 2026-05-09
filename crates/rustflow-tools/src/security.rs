@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Controls filesystem access boundaries, shell command execution,
 /// and environment variable exposure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SecurityPolicy {
     /// Filesystem security settings.
     #[serde(default)]
@@ -29,17 +29,6 @@ pub struct SecurityPolicy {
     /// Environment variable security settings.
     #[serde(default)]
     pub env: EnvPolicy,
-}
-
-impl Default for SecurityPolicy {
-    fn default() -> Self {
-        Self {
-            fs: FsPolicy::default(),
-            shell: ShellPolicy::default(),
-            network: NetworkPolicy::default(),
-            env: EnvPolicy::default(),
-        }
-    }
 }
 
 /// Filesystem sandbox policy.

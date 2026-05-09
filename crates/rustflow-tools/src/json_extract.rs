@@ -51,11 +51,11 @@ fn json_path(value: &serde_json::Value, path: &str) -> Option<serde_json::Value>
 
     // If the input is a string, try to parse it as JSON first.
     let parsed;
-    if let serde_json::Value::String(s) = current {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
-            parsed = v;
-            current = &parsed;
-        }
+    if let serde_json::Value::String(s) = current
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(s)
+    {
+        parsed = v;
+        current = &parsed;
     }
 
     for segment in path.split('.') {
