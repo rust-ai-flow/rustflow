@@ -271,12 +271,25 @@ impl AppState {
     ///
     /// Holding the read lock across both operations guarantees no events are
     /// missed between the snapshot and the subscription.
-    pub async fn observe_run(&self, agent_id: &str) -> Option<RunSubscription> {
+    pub async fn observe_run(
+        &self,
+        agent_id: &str,
+        since_seq: Option<u64>,
+    ) -> Option<RunSubscription> {
         let store = self.runs.read().await;
         let record = store.get(agent_id)?;
+        let events = match since_seq {
+            Some(since_seq) => record
+                .events
+                .iter()
+                .filter(|event| event.seq > since_seq)
+                .cloned()
+                .collect(),
+            None => record.events.clone(),
+        };
         Some(RunSubscription {
             run_id: record.run_id.clone(),
-            events: record.events.clone(),
+            events,
             done: record.done,
             receiver: record.sender.subscribe(),
         })
@@ -560,6 +573,13 @@ mod tests {
         std::env::temp_dir().join(format!("rustflow-run-store-test-{}", uuid::Uuid::new_v4()))
     }
 
+    fn step_started(step_id: &str) -> WsEvent {
+        WsEvent::StepStarted {
+            step_id: step_id.to_string(),
+            step_name: format!("Step {step_id}"),
+        }
+    }
+
     #[tokio::test]
     async fn test_start_or_observe_run_creates_missing_run() {
         let state = AppState::new();
@@ -616,7 +636,7 @@ mod tests {
             )
             .await;
 
-        let subscription = state.observe_run("agent-1").await.unwrap();
+        let subscription = state.observe_run("agent-1", None).await.unwrap();
 
         assert!(subscription.done);
         assert_eq!(subscription.events.len(), 1);
@@ -626,6 +646,75 @@ mod tests {
         assert!(matches!(
             &event.event,
             WsEvent::WorkflowFailed { error } if error == "boom"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_observe_run_without_since_seq_replays_full_history() {
+        let state = AppState::new();
+        let _ = state.start_or_observe_run("agent-1".to_string()).await;
+        state.emit_run_event("agent-1", step_started("a")).await;
+        state.emit_run_event("agent-1", step_started("b")).await;
+
+        let subscription = state.observe_run("agent-1", None).await.unwrap();
+
+        assert!(!subscription.done);
+        let seqs: Vec<u64> = subscription.events.iter().map(|event| event.seq).collect();
+        assert_eq!(seqs, vec![0, 1]);
+    }
+
+    #[tokio::test]
+    async fn test_observe_run_since_seq_replays_only_greater_sequences() {
+        let state = AppState::new();
+        let _ = state.start_or_observe_run("agent-1".to_string()).await;
+        state.emit_run_event("agent-1", step_started("a")).await;
+        state.emit_run_event("agent-1", step_started("b")).await;
+        state.emit_run_event("agent-1", step_started("c")).await;
+
+        let subscription = state.observe_run("agent-1", Some(0)).await.unwrap();
+
+        let seqs: Vec<u64> = subscription.events.iter().map(|event| event.seq).collect();
+        assert_eq!(seqs, vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_observe_run_since_seq_beyond_history_replays_empty_and_stays_live() {
+        let state = AppState::new();
+        let _ = state.start_or_observe_run("agent-1".to_string()).await;
+        state.emit_run_event("agent-1", step_started("a")).await;
+
+        let mut subscription = state.observe_run("agent-1", Some(99)).await.unwrap();
+
+        assert!(subscription.events.is_empty());
+        assert!(!subscription.done);
+
+        state.emit_run_event("agent-1", step_started("b")).await;
+        let live = subscription.receiver.recv().await.unwrap();
+        assert_eq!(live.seq, 1);
+    }
+
+    #[tokio::test]
+    async fn test_observe_run_since_seq_filters_completed_history_and_marks_done() {
+        let state = AppState::new();
+        let _ = state.start_or_observe_run("agent-1".to_string()).await;
+        state.emit_run_event("agent-1", step_started("a")).await;
+        state
+            .finish_run(
+                "agent-1",
+                WsEvent::WorkflowCompleted {
+                    outputs: serde_json::json!({ "a": "done" }),
+                },
+            )
+            .await;
+
+        let subscription = state.observe_run("agent-1", Some(0)).await.unwrap();
+
+        assert!(subscription.done);
+        assert_eq!(subscription.events.len(), 1);
+        assert_eq!(subscription.events[0].seq, 1);
+        assert!(matches!(
+            &subscription.events[0].event,
+            WsEvent::WorkflowCompleted { outputs } if outputs["a"] == "done"
         ));
     }
 
@@ -687,7 +776,7 @@ mod tests {
         assert_eq!(second_live.seq, 1);
         assert_eq!(first_live.run_id, second_live.run_id);
 
-        let replay = state.observe_run("agent-1").await.unwrap();
+        let replay = state.observe_run("agent-1", None).await.unwrap();
         assert!(replay.done);
         assert_eq!(replay.events.len(), 2);
         assert_eq!(replay.events[0].run_id, first_live.run_id);
@@ -726,7 +815,7 @@ mod tests {
             )
             .await;
 
-        let replay = state.observe_run("agent-1").await.unwrap();
+        let replay = state.observe_run("agent-1", None).await.unwrap();
         assert_ne!(first_run_id, second_run_id);
         assert_eq!(replay.events.len(), 1);
         assert_eq!(replay.events[0].run_id, second_run_id);
@@ -761,7 +850,7 @@ mod tests {
             .await;
 
         let recovered_state = AppState::with_run_store_path(store_path.clone());
-        let recovered = recovered_state.observe_run("agent-1").await.unwrap();
+        let recovered = recovered_state.observe_run("agent-1", None).await.unwrap();
 
         assert!(recovered.done);
         assert_eq!(recovered.run_id, first_run_id);
@@ -813,7 +902,7 @@ mod tests {
             )
             .await;
 
-        let replay = recovered_state.observe_run("agent-1").await.unwrap();
+        let replay = recovered_state.observe_run("agent-1", None).await.unwrap();
         assert_ne!(first_run_id, second_run_id);
         assert_eq!(replay.events.len(), 1);
         assert_eq!(replay.events[0].run_id, second_run_id);
