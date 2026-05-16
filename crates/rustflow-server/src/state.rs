@@ -272,11 +272,29 @@ impl AppState {
     /// Holding the read lock across both operations guarantees no events are
     /// missed between the snapshot and the subscription.
     pub async fn observe_run(&self, agent_id: &str) -> Option<RunSubscription> {
+        self.observe_run_since(agent_id, None).await
+    }
+
+    /// Atomically snapshot filtered past events and subscribe to future ones.
+    pub async fn observe_run_since(
+        &self,
+        agent_id: &str,
+        since_seq: Option<u64>,
+    ) -> Option<RunSubscription> {
         let store = self.runs.read().await;
         let record = store.get(agent_id)?;
+        let events = match since_seq {
+            Some(since_seq) => record
+                .events
+                .iter()
+                .filter(|event| event.seq > since_seq)
+                .cloned()
+                .collect(),
+            None => record.events.clone(),
+        };
         Some(RunSubscription {
             run_id: record.run_id.clone(),
-            events: record.events.clone(),
+            events,
             done: record.done,
             receiver: record.sender.subscribe(),
         })
@@ -560,6 +578,18 @@ mod tests {
         std::env::temp_dir().join(format!("rustflow-run-store-test-{}", uuid::Uuid::new_v4()))
     }
 
+    async fn emit_step_started(state: &AppState, agent_id: &str, step_id: &str) {
+        state
+            .emit_run_event(
+                agent_id,
+                WsEvent::StepStarted {
+                    step_id: step_id.to_string(),
+                    step_name: step_id.to_string(),
+                },
+            )
+            .await;
+    }
+
     #[tokio::test]
     async fn test_start_or_observe_run_creates_missing_run() {
         let state = AppState::new();
@@ -626,6 +656,57 @@ mod tests {
         assert!(matches!(
             &event.event,
             WsEvent::WorkflowFailed { error } if error == "boom"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_observe_run_since_filters_history_and_keeps_live_subscription() {
+        let state = AppState::new();
+        let _ = state.start_or_observe_run("agent-1".to_string()).await;
+        emit_step_started(&state, "agent-1", "a").await;
+        emit_step_started(&state, "agent-1", "b").await;
+        emit_step_started(&state, "agent-1", "c").await;
+
+        let full_replay = state.observe_run_since("agent-1", None).await.unwrap();
+        assert_eq!(full_replay.events.len(), 3);
+
+        let middle_replay = state.observe_run_since("agent-1", Some(0)).await.unwrap();
+        assert_eq!(middle_replay.events.len(), 2);
+        assert_eq!(middle_replay.events[0].seq, 1);
+        assert_eq!(middle_replay.events[1].seq, 2);
+
+        let mut out_of_range = state.observe_run_since("agent-1", Some(99)).await.unwrap();
+        assert!(out_of_range.events.is_empty());
+        assert!(!out_of_range.done);
+
+        emit_step_started(&state, "agent-1", "d").await;
+
+        let live = out_of_range.receiver.recv().await.unwrap();
+        assert_eq!(live.seq, 3);
+    }
+
+    #[tokio::test]
+    async fn test_observe_run_since_filters_completed_run_replay() {
+        let state = AppState::new();
+        let _ = state.start_or_observe_run("agent-1".to_string()).await;
+        emit_step_started(&state, "agent-1", "a").await;
+        state
+            .finish_run(
+                "agent-1",
+                WsEvent::WorkflowCompleted {
+                    outputs: serde_json::json!({ "a": "done" }),
+                },
+            )
+            .await;
+
+        let subscription = state.observe_run_since("agent-1", Some(0)).await.unwrap();
+
+        assert!(subscription.done);
+        assert_eq!(subscription.events.len(), 1);
+        assert_eq!(subscription.events[0].seq, 1);
+        assert!(matches!(
+            &subscription.events[0].event,
+            WsEvent::WorkflowCompleted { outputs } if outputs["a"] == "done"
         ));
     }
 
@@ -772,6 +853,38 @@ mod tests {
         assert_eq!(recovered.events[1].seq, 1);
         assert!(matches!(
             &recovered.events[1].event,
+            WsEvent::WorkflowCompleted { outputs } if outputs["a"] == "done"
+        ));
+
+        let _ = fs::remove_dir_all(store_path);
+    }
+
+    #[tokio::test]
+    async fn test_observe_run_since_filters_recovered_completed_run_replay() {
+        let store_path = temp_run_store_path();
+        let state = AppState::with_run_store_path(store_path.clone());
+        let _ = state.start_or_observe_run("agent-1".to_string()).await;
+        emit_step_started(&state, "agent-1", "a").await;
+        state
+            .finish_run(
+                "agent-1",
+                WsEvent::WorkflowCompleted {
+                    outputs: serde_json::json!({ "a": "done" }),
+                },
+            )
+            .await;
+
+        let recovered_state = AppState::with_run_store_path(store_path.clone());
+        let subscription = recovered_state
+            .observe_run_since("agent-1", Some(0))
+            .await
+            .unwrap();
+
+        assert!(subscription.done);
+        assert_eq!(subscription.events.len(), 1);
+        assert_eq!(subscription.events[0].seq, 1);
+        assert!(matches!(
+            &subscription.events[0].event,
             WsEvent::WorkflowCompleted { outputs } if outputs["a"] == "done"
         ));
 
