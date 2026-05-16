@@ -272,11 +272,31 @@ impl AppState {
     /// Holding the read lock across both operations guarantees no events are
     /// missed between the snapshot and the subscription.
     pub async fn observe_run(&self, agent_id: &str) -> Option<RunSubscription> {
+        self.observe_run_since(agent_id, None).await
+    }
+
+    /// Atomically snapshot past events after `since_seq` and subscribe to future ones.
+    ///
+    /// `since_seq` is an event replay cursor only. It does not resume execution.
+    pub async fn observe_run_since(
+        &self,
+        agent_id: &str,
+        since_seq: Option<u64>,
+    ) -> Option<RunSubscription> {
         let store = self.runs.read().await;
         let record = store.get(agent_id)?;
+        let events = match since_seq {
+            Some(seq) => record
+                .events
+                .iter()
+                .filter(|event| event.seq > seq)
+                .cloned()
+                .collect(),
+            None => record.events.clone(),
+        };
         Some(RunSubscription {
             run_id: record.run_id.clone(),
-            events: record.events.clone(),
+            events,
             done: record.done,
             receiver: record.sender.subscribe(),
         })
@@ -697,6 +717,145 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_observe_run_since_without_cursor_replays_full_history() {
+        let state = AppState::new();
+        let _ = state.start_or_observe_run("agent-1".to_string()).await;
+        state
+            .emit_run_event(
+                "agent-1",
+                WsEvent::StepStarted {
+                    step_id: "a".to_string(),
+                    step_name: "A".to_string(),
+                },
+            )
+            .await;
+        state
+            .finish_run(
+                "agent-1",
+                WsEvent::WorkflowCompleted {
+                    outputs: serde_json::json!({ "a": "done" }),
+                },
+            )
+            .await;
+
+        let replay = state.observe_run_since("agent-1", None).await.unwrap();
+
+        assert!(replay.done);
+        assert_eq!(replay.events.len(), 2);
+        assert_eq!(replay.events[0].seq, 0);
+        assert_eq!(replay.events[1].seq, 1);
+    }
+
+    #[tokio::test]
+    async fn test_observe_run_since_replays_after_middle_sequence() {
+        let state = AppState::new();
+        let _ = state.start_or_observe_run("agent-1".to_string()).await;
+        state
+            .emit_run_event(
+                "agent-1",
+                WsEvent::StepStarted {
+                    step_id: "a".to_string(),
+                    step_name: "A".to_string(),
+                },
+            )
+            .await;
+        state
+            .emit_run_event(
+                "agent-1",
+                WsEvent::StepStarted {
+                    step_id: "b".to_string(),
+                    step_name: "B".to_string(),
+                },
+            )
+            .await;
+        state
+            .finish_run(
+                "agent-1",
+                WsEvent::WorkflowCompleted {
+                    outputs: serde_json::json!({ "b": "done" }),
+                },
+            )
+            .await;
+
+        let replay = state.observe_run_since("agent-1", Some(0)).await.unwrap();
+
+        assert!(replay.done);
+        assert_eq!(replay.events.len(), 2);
+        assert_eq!(replay.events[0].seq, 1);
+        assert_eq!(replay.events[1].seq, 2);
+    }
+
+    #[tokio::test]
+    async fn test_observe_run_since_out_of_range_starts_empty_and_receives_live_events() {
+        let state = AppState::new();
+        let _ = state.start_or_observe_run("agent-1".to_string()).await;
+        state
+            .emit_run_event(
+                "agent-1",
+                WsEvent::StepStarted {
+                    step_id: "a".to_string(),
+                    step_name: "A".to_string(),
+                },
+            )
+            .await;
+
+        let mut replay = state.observe_run_since("agent-1", Some(99)).await.unwrap();
+
+        assert!(!replay.done);
+        assert!(replay.events.is_empty());
+
+        state
+            .emit_run_event(
+                "agent-1",
+                WsEvent::StepStarted {
+                    step_id: "b".to_string(),
+                    step_name: "B".to_string(),
+                },
+            )
+            .await;
+
+        let live = replay.receiver.recv().await.unwrap();
+        assert_eq!(live.seq, 1);
+        assert!(matches!(
+            &live.event,
+            WsEvent::StepStarted { step_id, .. } if step_id == "b"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_observe_run_since_replays_completed_run_after_cursor() {
+        let state = AppState::new();
+        let _ = state.start_or_observe_run("agent-1".to_string()).await;
+        state
+            .emit_run_event(
+                "agent-1",
+                WsEvent::StepStarted {
+                    step_id: "a".to_string(),
+                    step_name: "A".to_string(),
+                },
+            )
+            .await;
+        state
+            .finish_run(
+                "agent-1",
+                WsEvent::WorkflowCompleted {
+                    outputs: serde_json::json!({ "a": "done" }),
+                },
+            )
+            .await;
+
+        let replay = state.observe_run_since("agent-1", Some(0)).await.unwrap();
+
+        assert!(replay.done);
+        assert_eq!(replay.events.len(), 1);
+        assert_eq!(replay.events[0].seq, 1);
+        assert!(matches!(
+            &replay.events[0].event,
+            WsEvent::WorkflowCompleted { outputs } if outputs["a"] == "done"
+        ));
+    }
+
+    #[tokio::test]
     async fn test_new_stream_after_completed_run_gets_new_run_id_and_resets_sequence() {
         let state = AppState::new();
         let first_run_id = match state.start_or_observe_run("agent-1".to_string()).await {
@@ -772,6 +931,52 @@ mod tests {
         assert_eq!(recovered.events[1].seq, 1);
         assert!(matches!(
             &recovered.events[1].event,
+            WsEvent::WorkflowCompleted { outputs } if outputs["a"] == "done"
+        ));
+
+        let _ = fs::remove_dir_all(store_path);
+    }
+
+    #[tokio::test]
+    async fn test_observe_run_since_replays_recovered_completed_run_after_cursor() {
+        let store_path = temp_run_store_path();
+        let state = AppState::with_run_store_path(store_path.clone());
+        let first_run_id = match state.start_or_observe_run("agent-1".to_string()).await {
+            RunStart::Started(subscription) => subscription.run_id,
+            RunStart::Existing(_) => panic!("missing run should be started"),
+        };
+
+        state
+            .emit_run_event(
+                "agent-1",
+                WsEvent::StepStarted {
+                    step_id: "a".to_string(),
+                    step_name: "A".to_string(),
+                },
+            )
+            .await;
+        state
+            .finish_run(
+                "agent-1",
+                WsEvent::WorkflowCompleted {
+                    outputs: serde_json::json!({ "a": "done" }),
+                },
+            )
+            .await;
+
+        let recovered_state = AppState::with_run_store_path(store_path.clone());
+        let recovered = recovered_state
+            .observe_run_since("agent-1", Some(0))
+            .await
+            .unwrap();
+
+        assert!(recovered.done);
+        assert_eq!(recovered.run_id, first_run_id);
+        assert_eq!(recovered.events.len(), 1);
+        assert_eq!(recovered.events[0].run_id, first_run_id);
+        assert_eq!(recovered.events[0].seq, 1);
+        assert!(matches!(
+            &recovered.events[0].event,
             WsEvent::WorkflowCompleted { outputs } if outputs["a"] == "done"
         ));
 

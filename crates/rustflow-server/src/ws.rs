@@ -12,10 +12,11 @@
 //! ## `GET /agents/{id}/observe`
 //!
 //! Attach to an existing active or completed run as a read-only observer.
-//! Replays all events emitted so far, then streams live events until the
-//! workflow finishes. Completed/recent run records may also be recovered from
-//! the local run store after restart. Returns `workflow_failed` immediately if
-//! no run exists.
+//! Replays all events emitted so far, or only events with `seq > since_seq`
+//! when `?since_seq=N` is supplied, then streams live events until the workflow
+//! finishes. Completed/recent run records may also be recovered from the local
+//! run store after restart. Returns `workflow_failed` immediately if no run
+//! exists.
 //!
 //! Persistent replay is local-disk best effort only. It does not provide
 //! crash-atomic distributed durable execution, and active workflow execution is
@@ -45,7 +46,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
@@ -206,6 +207,13 @@ pub struct StartMessage {
     pub vars: HashMap<String, serde_json::Value>,
 }
 
+/// Optional query parameters for `/observe`.
+#[derive(Debug, Deserialize, Default)]
+pub struct ObserveQuery {
+    #[serde(default)]
+    pub since_seq: Option<u64>,
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `GET /agents/{id}/stream` — start or join a run and stream events.
@@ -215,7 +223,7 @@ pub async fn stream_agent(
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| async move {
-        if let Err(e) = run_socket(socket, state, id, false).await {
+        if let Err(e) = run_socket(socket, state, id, false, None).await {
             warn!("WebSocket (stream) error: {e}");
         }
     })
@@ -225,10 +233,11 @@ pub async fn stream_agent(
 pub async fn observe_agent(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<ObserveQuery>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| async move {
-        if let Err(e) = run_socket(socket, state, id, true).await {
+        if let Err(e) = run_socket(socket, state, id, true, query.since_seq).await {
             warn!("WebSocket (observe) error: {e}");
         }
     })
@@ -241,6 +250,7 @@ async fn run_socket(
     state: AppState,
     id: String,
     observe_only: bool,
+    since_seq: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!(agent_id = %id, observe_only, "WebSocket session started");
 
@@ -257,7 +267,7 @@ async fn run_socket(
 
     // 2. Either observe an existing run or atomically create a new run.
     let subscription = if observe_only {
-        match state.observe_run(&id).await {
+        match state.observe_run_since(&id, since_seq).await {
             Some(subscription) => subscription,
             None => {
                 let msg = serde_json::to_string(&WsEventEnvelope::new(
@@ -452,6 +462,8 @@ async fn forward_to_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::extract::FromRequestParts;
+    use axum::http::Request;
     use rustflow_core::circuit_breaker::{CbState, CircuitBreakerConfig, CircuitBreakerRegistry};
     use rustflow_core::step::Step;
     use rustflow_llm::LlmGateway;
@@ -657,6 +669,34 @@ mod tests {
     fn test_start_message_default() {
         let msg = StartMessage::default();
         assert!(msg.vars.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_observe_query_deserializes_since_seq() {
+        let (mut parts, _) = Request::builder()
+            .uri("/agents/agent-1/observe?since_seq=42")
+            .body(())
+            .unwrap()
+            .into_parts();
+
+        let Query(query) = Query::<ObserveQuery>::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+
+        assert_eq!(query.since_seq, Some(42));
+    }
+
+    #[tokio::test]
+    async fn test_observe_query_rejects_invalid_since_seq() {
+        let (mut parts, _) = Request::builder()
+            .uri("/agents/agent-1/observe?since_seq=invalid")
+            .body(())
+            .unwrap()
+            .into_parts();
+
+        let result = Query::<ObserveQuery>::from_request_parts(&mut parts, &()).await;
+
+        assert!(result.is_err());
     }
 
     #[tokio::test]

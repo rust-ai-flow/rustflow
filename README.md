@@ -259,7 +259,7 @@ Default port: **18790**
 | `/agents/{id}` | DELETE | Delete an agent |
 | `/agents/{id}/run` | POST | Execute and wait for the final result |
 | `/agents/{id}/stream` | **WS** | Execute and stream real-time events |
-| `/agents/{id}/observe` | **WS** | Attach to an existing run as a read-only observer |
+| `/agents/{id}/observe` | **WS** | Attach to an existing run as a read-only observer; accepts optional `since_seq` |
 | `/playground/agents` | POST | Create an agent from YAML (used by the Playground) |
 
 ### WebSocket Streaming
@@ -286,13 +286,13 @@ The attached client receives the same `run_id` as the original run. When a compl
 
 #### `/agents/{id}/observe` — Reconnect to an ongoing or recent run
 
-Same envelope protocol as `/stream`. Replays all events currently held in memory for the agent run, then streams live until the workflow finishes. The server also keeps a best-effort local-disk replay snapshot for recent runs, so completed runs can be observed again after a process restart. If no active, completed, or recovered run exists, returns `workflow_failed` immediately.
+Same envelope protocol as `/stream`. Replays all events currently held in memory for the agent run, then streams live until the workflow finishes. Add `?since_seq=N` to replay only buffered events with `seq > N`; live events continue streaming from the same connection. The server also keeps a best-effort local-disk replay snapshot for recent runs, so completed runs can be observed again after a process restart. If no active, completed, or recovered run exists, returns `workflow_failed` immediately.
 
 ```
 Use this endpoint to reconnect after a page refresh or network drop.
 ```
 
-Persistent replay is local to one server process/runtime directory. By default snapshots are stored under `./.rustflow/runs`; set `RUSTFLOW_RUN_STORE_DIR` to use a different directory. This is best-effort local-disk recovery for event replay only: it is not crash-atomic distributed durable execution, does not resume active workflow execution after restart, and clients cannot request replay from a specific `seq` offset.
+Persistent replay is local to one server process/runtime directory. By default snapshots are stored under `./.rustflow/runs`; set `RUSTFLOW_RUN_STORE_DIR` to use a different directory. This is best-effort local-disk recovery for event replay only: `since_seq` filters replayed event history, but it is not crash-atomic distributed durable execution and does not resume active workflow execution after restart.
 
 **Envelope fields:**
 
