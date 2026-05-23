@@ -174,7 +174,8 @@ rustflow <command> [options]
 | `serve` | Start the HTTP + WebSocket API server (port 18790) |
 | `playground` | Start the server and open the Web Playground |
 | `doctor` | Check environment (Rust, Ollama, API keys, server) |
-| `doctor --full` | Include provider and server reachability checks |
+| `doctor --full` | Include provider and server reachability checks; API keys are reported only as set / not set |
+| `doctor --security` | Read-only security checks for credential presence, `.env`, and run store configuration |
 | `init [name]` | Scaffold a new project with sample workflow |
 
 ### `rustflow run` — Live Progress Display
@@ -221,6 +222,8 @@ See [docs/security.md](docs/security.md) for the current file, network, shell, e
   [!] OPENAI_API_KEY        not set → platform.openai.com
   [✓] RustFlow server       running v0.1.0 at localhost:18790
 ```
+
+`rustflow doctor --security` is read-only and never prints API key values or prefixes. `rustflow doctor --full` also reports provider keys only as `set` / `not set`.
 
 ---
 

@@ -5,19 +5,24 @@ use crossterm::style::Stylize;
 #[derive(Args, Debug)]
 pub struct DoctorArgs {
     /// Also run optional checks (Ollama, API keys, running server).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "security")]
     pub full: bool,
+
+    /// Run read-only security checks without printing secret values.
+    #[arg(long)]
+    pub security: bool,
 }
 
 // ── Check result ──────────────────────────────────────────────────────────────
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 enum Status {
     Ok,
     Warn,
     Fail,
 }
 
+#[derive(Debug, PartialEq)]
 struct Check {
     label: String,
     status: Status,
@@ -109,19 +114,25 @@ fn check_rustflow() -> Check {
     }
 }
 
-fn check_env_key(name: &str, provider: &str, url: &str) -> Check {
+fn env_key_check(
+    name: &str,
+    value: Option<std::ffi::OsString>,
+    provider: &str,
+    url: &str,
+) -> Check {
     let label = format!("{name} env var");
-    match std::env::var(name) {
-        Ok(val) if !val.is_empty() => {
-            let masked = format!("{}…{}", &val[..6.min(val.len())], "*".repeat(8));
-            Check::ok(label, masked)
-        }
+    match value {
+        Some(val) if !val.is_empty() => Check::ok(label, "set"),
         _ => Check::warn(
             label,
             "not set",
             format!("Required for {provider} — get a key at {url}"),
         ),
     }
+}
+
+fn check_env_key(name: &str, provider: &str, url: &str) -> Check {
+    env_key_check(name, std::env::var_os(name), provider, url)
 }
 
 async fn check_ollama() -> Check {
@@ -161,9 +172,8 @@ async fn check_server() -> Check {
     }
 }
 
-fn check_dotenv() -> Check {
-    let path = std::path::Path::new(".env");
-    if path.exists() {
+fn dotenv_check(exists: bool) -> Check {
+    if exists {
         Check::ok(".env file", "found in current directory")
     } else {
         Check::warn(
@@ -172,6 +182,50 @@ fn check_dotenv() -> Check {
             "Copy .env.example to .env and fill in your API keys",
         )
     }
+}
+
+fn check_dotenv() -> Check {
+    dotenv_check(std::path::Path::new(".env").exists())
+}
+
+fn run_store_dir_check(value: Option<std::ffi::OsString>) -> Check {
+    match value {
+        Some(path) if !path.is_empty() => Check::ok(
+            "RUSTFLOW_RUN_STORE_DIR env var",
+            "set; using custom run store directory",
+        ),
+        Some(_) => Check::warn(
+            "RUSTFLOW_RUN_STORE_DIR env var",
+            "empty; using default .rustflow/runs",
+            "Set RUSTFLOW_RUN_STORE_DIR to use a custom run store directory",
+        ),
+        None => Check::ok(
+            "RUSTFLOW_RUN_STORE_DIR env var",
+            "not set; using default .rustflow/runs",
+        ),
+    }
+}
+
+fn check_run_store_dir() -> Check {
+    run_store_dir_check(std::env::var_os("RUSTFLOW_RUN_STORE_DIR"))
+}
+
+fn security_checks() -> Vec<Check> {
+    vec![
+        check_env_key(
+            "OPENAI_API_KEY",
+            "OpenAI",
+            "https://platform.openai.com/api-keys",
+        ),
+        check_env_key(
+            "ANTHROPIC_API_KEY",
+            "Anthropic",
+            "https://console.anthropic.com",
+        ),
+        check_env_key("GLM_API_KEY", "GLM", "https://bigmodel.cn"),
+        check_dotenv(),
+        check_run_store_dir(),
+    ]
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -204,12 +258,20 @@ pub async fn execute(args: DoctorArgs) -> anyhow::Result<()> {
     println!("  {}  RustFlow Doctor", "⚕".bold());
     println!();
 
-    let mut checks: Vec<Check> = vec![
-        check_rustc(),
-        check_cargo(),
-        check_rustflow(),
-        check_dotenv(),
-    ];
+    let mut checks: Vec<Check> = if args.security {
+        println!(
+            "  {}  Running read-only security checks...\n",
+            "·".dark_grey()
+        );
+        security_checks()
+    } else {
+        vec![
+            check_rustc(),
+            check_cargo(),
+            check_rustflow(),
+            check_dotenv(),
+        ]
+    };
 
     if args.full {
         println!("  {}  Running full checks...\n", "·".dark_grey());
@@ -225,6 +287,7 @@ pub async fn execute(args: DoctorArgs) -> anyhow::Result<()> {
             "Anthropic",
             "https://console.anthropic.com",
         ));
+        checks.push(check_env_key("GLM_API_KEY", "GLM", "https://bigmodel.cn"));
 
         // Network checks
         checks.push(check_ollama().await);
@@ -253,10 +316,10 @@ pub async fn execute(args: DoctorArgs) -> anyhow::Result<()> {
                 warns
             );
         }
-        if !args.full {
+        if !args.full && !args.security {
             println!();
             println!(
-                "  {}  Run `rustflow doctor --full` for provider and server checks.",
+                "  {}  Run `rustflow doctor --full` for provider/server checks or `rustflow doctor --security` for security checks.",
                 "·".dark_grey()
             );
         }
@@ -264,4 +327,55 @@ pub async fn execute(args: DoctorArgs) -> anyhow::Result<()> {
 
     println!();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_key_check_reports_set_without_secret_material() {
+        let check = env_key_check(
+            "OPENAI_API_KEY",
+            Some("sk-test-secret".into()),
+            "OpenAI",
+            "https://platform.openai.com/api-keys",
+        );
+
+        assert_eq!(check.status, Status::Ok);
+        assert_eq!(check.detail, "set");
+        assert!(!check.detail.contains("sk-test"));
+        assert!(check.hint.is_none());
+    }
+
+    #[test]
+    fn env_key_check_reports_not_set() {
+        let check = env_key_check("GLM_API_KEY", None, "GLM", "https://bigmodel.cn");
+
+        assert_eq!(check.status, Status::Warn);
+        assert_eq!(check.detail, "not set");
+    }
+
+    #[test]
+    fn dotenv_check_reports_presence_and_absence() {
+        let present = dotenv_check(true);
+        let absent = dotenv_check(false);
+
+        assert_eq!(present.status, Status::Ok);
+        assert_eq!(present.detail, "found in current directory");
+        assert_eq!(absent.status, Status::Warn);
+        assert_eq!(absent.detail, "not found in current directory");
+    }
+
+    #[test]
+    fn run_store_dir_check_reports_default_and_custom_status() {
+        let defaulted = run_store_dir_check(None);
+        let custom = run_store_dir_check(Some("/tmp/rustflow-runs".into()));
+
+        assert_eq!(defaulted.status, Status::Ok);
+        assert_eq!(defaulted.detail, "not set; using default .rustflow/runs");
+        assert_eq!(custom.status, Status::Ok);
+        assert_eq!(custom.detail, "set; using custom run store directory");
+        assert!(!custom.detail.contains("/tmp/rustflow-runs"));
+    }
 }

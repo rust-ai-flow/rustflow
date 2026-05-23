@@ -66,6 +66,15 @@ The `env` tool uses `SecurityPolicy.env` / `EnvPolicy`.
   case-insensitively when they contain patterns such as `KEY`, `SECRET`,
   `PASSWORD`, `PASSWD`, `TOKEN`, `CREDENTIAL`, or `PRIVATE`.
 
+## Doctor Security Checks
+
+`rustflow doctor --security` performs read-only checks for
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GLM_API_KEY`, `.env`, and
+`RUSTFLOW_RUN_STORE_DIR`. It reports credential variables only as `set` or
+`not set`; it never prints secret values or key prefixes.
+
+`rustflow doctor --full` uses the same no-secret provider key reporting.
+
 ## WASM Plugins
 
 `PluginLoader::load_file` reads the supplied `.wasm` path and loads the bytes

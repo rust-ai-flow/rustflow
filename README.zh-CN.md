@@ -174,7 +174,8 @@ rustflow <command> [options]
 | `serve` | 启动 HTTP + WebSocket API 服务器（端口 18790） |
 | `playground` | 启动服务器并打开 Web Playground |
 | `doctor` | 检查环境（Rust、Ollama、API Key、服务器） |
-| `doctor --full` | 包含 Provider 和服务器连通性检查 |
+| `doctor --full` | 包含 Provider 和服务器连通性检查；API Key 仅显示 set / not set |
+| `doctor --security` | 只读安全检查：凭据存在性、`.env` 和 run store 配置 |
 | `init [name]` | 初始化项目，生成示例工作流 |
 
 ### `rustflow run` — 实时流程图
@@ -219,6 +220,8 @@ rustflow playground --allow-shell
   [!] OPENAI_API_KEY        not set → platform.openai.com
   [✓] RustFlow server       running v0.1.0 at localhost:18790
 ```
+
+`rustflow doctor --security` 是只读检查，绝不会打印 API Key 值或前缀。`rustflow doctor --full` 也只会将 Provider Key 报告为 `set` / `not set`。
 
 ---
 
