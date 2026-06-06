@@ -5,7 +5,7 @@ use tracing::{debug, instrument};
 
 use crate::error::{LlmError, Result};
 use crate::provider::{LlmProvider, ResponseStream};
-use crate::types::{LlmRequest, LlmResponse};
+use crate::types::{LlmRequest, LlmResponse, LlmResponseMetadata};
 
 /// Routes LLM requests to the appropriate registered provider.
 pub struct LlmGateway {
@@ -63,12 +63,16 @@ impl LlmGateway {
     #[instrument(skip(self, request), fields(provider, model = %request.model))]
     pub async fn complete(&self, provider_name: &str, request: &LlmRequest) -> Result<LlmResponse> {
         debug!(provider = %provider_name, "routing completion request");
-        self.get_provider(provider_name)?.complete(request).await
+        let response = self.get_provider(provider_name)?.complete(request).await?;
+        Ok(Self::ensure_metadata(provider_name, request, response))
     }
 
     /// Send a completion request to the default provider.
     pub async fn complete_default(&self, request: &LlmRequest) -> Result<LlmResponse> {
-        self.default_provider()?.complete(request).await
+        let provider = self.default_provider()?;
+        let provider_name = provider.name().to_string();
+        let response = provider.complete(request).await?;
+        Ok(Self::ensure_metadata(&provider_name, request, response))
     }
 
     /// Send a streaming request to a named provider.
@@ -84,6 +88,22 @@ impl LlmGateway {
     /// List all registered provider names.
     pub fn providers(&self) -> Vec<&str> {
         self.providers.keys().map(String::as_str).collect()
+    }
+
+    fn ensure_metadata(
+        provider_name: &str,
+        request: &LlmRequest,
+        mut response: LlmResponse,
+    ) -> LlmResponse {
+        response.metadata.get_or_insert_with(|| {
+            LlmResponseMetadata::non_streaming(
+                provider_name,
+                &request.model,
+                &response.model,
+                &response.model,
+            )
+        });
+        response
     }
 }
 
@@ -128,6 +148,7 @@ mod tests {
                     output_tokens: 5,
                 }),
                 stop_reason: Some("end_turn".to_string()),
+                metadata: None,
             })
         }
 

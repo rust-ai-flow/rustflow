@@ -5,7 +5,7 @@ use tracing::{debug, instrument};
 
 use crate::error::{LlmError, Result};
 use crate::provider::{LlmProvider, ResponseStream};
-use crate::types::{LlmRequest, LlmResponse, Role, TokenUsage};
+use crate::types::{LlmRequest, LlmResponse, LlmResponseMetadata, Role, TokenUsage};
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
@@ -140,14 +140,22 @@ impl LlmProvider for OpenAiProvider {
                 message: "no choices returned".to_string(),
             })?;
 
+        let served_model = parsed.model;
+
         Ok(LlmResponse {
             content: choice.message.content.unwrap_or_default(),
-            model: parsed.model,
+            model: served_model.clone(),
             usage: parsed.usage.map(|u| TokenUsage {
                 input_tokens: u.prompt_tokens,
                 output_tokens: u.completion_tokens,
             }),
             stop_reason: choice.finish_reason,
+            metadata: Some(LlmResponseMetadata::non_streaming(
+                "openai",
+                &request.model,
+                &request.model,
+                &served_model,
+            )),
         })
     }
 

@@ -5,7 +5,7 @@ use tracing::{debug, instrument};
 
 use crate::error::{LlmError, Result};
 use crate::provider::{LlmProvider, ResponseStream};
-use crate::types::{LlmRequest, LlmResponse, Role, TokenUsage};
+use crate::types::{LlmRequest, LlmResponse, LlmResponseMetadata, Role, TokenUsage};
 
 const DEFAULT_BASE_URL: &str = "https://open.bigmodel.cn/api/paas/v4";
 const DEFAULT_MODEL: &str = "glm-4-flash";
@@ -128,6 +128,7 @@ impl LlmProvider for GlmProvider {
     #[instrument(skip(self, request), fields(model = %request.model))]
     async fn complete(&self, request: &LlmRequest) -> Result<LlmResponse> {
         let model = self.resolve_model(request);
+        let effective_model = model.to_string();
         let messages: Vec<GlmMessage<'_>> = request
             .messages
             .iter()
@@ -174,14 +175,22 @@ impl LlmProvider for GlmProvider {
                 message: "no choices returned".to_string(),
             })?;
 
+        let response_model = parsed.model;
+
         Ok(LlmResponse {
             content: choice.message.content.unwrap_or_default(),
-            model: parsed.model,
+            model: response_model.clone(),
             usage: parsed.usage.map(|u| TokenUsage {
                 input_tokens: u.prompt_tokens,
                 output_tokens: u.completion_tokens,
             }),
             stop_reason: choice.finish_reason,
+            metadata: Some(LlmResponseMetadata::non_streaming(
+                "glm",
+                &request.model,
+                &effective_model,
+                &response_model,
+            )),
         })
     }
 

@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use rustflow_llm::error::{LlmError, Result};
 use rustflow_llm::gateway::LlmGateway;
 use rustflow_llm::provider::{LlmProvider, ResponseStream};
-use rustflow_llm::types::{LlmRequest, LlmResponse, TokenUsage};
+use rustflow_llm::types::{LlmRequest, LlmResponse, Message, TokenUsage};
 
 /// A fake provider for testing gateway routing.
 struct FakeProvider {
@@ -33,6 +33,7 @@ impl LlmProvider for FakeProvider {
                 output_tokens: 5,
             }),
             stop_reason: Some("end_turn".to_string()),
+            metadata: None,
         })
     }
 
@@ -76,12 +77,57 @@ async fn test_gateway_complete_routes_to_provider() {
 }
 
 #[tokio::test]
+async fn test_gateway_complete_adds_metadata_without_request_secrets() {
+    let mut gw = LlmGateway::new();
+    gw.register(FakeProvider::new("test-provider"));
+    let req = LlmRequest::new(
+        "gpt-4",
+        vec![Message::user(
+            "prompt text with OPENAI_API_KEY and sk-test-secret",
+        )],
+    );
+
+    let resp = gw.complete("test-provider", &req).await.unwrap();
+    let metadata = resp.metadata.as_ref().unwrap();
+    assert_eq!(metadata.provider, "test-provider");
+    assert_eq!(metadata.requested_model, "gpt-4");
+    assert_eq!(metadata.effective_model, "gpt-4");
+    assert_eq!(metadata.served_model, "gpt-4");
+
+    let metadata_json = serde_json::to_string(metadata).unwrap();
+    assert!(metadata_json.contains("\"execution_mode\":\"non_streaming\""));
+    assert!(metadata_json.contains("\"cache_policy\":\"disabled\""));
+    assert!(!metadata_json.contains("prompt text"));
+    assert!(!metadata_json.contains("OPENAI_API_KEY"));
+    assert!(!metadata_json.contains("sk-test-secret"));
+}
+
+#[tokio::test]
 async fn test_gateway_complete_default() {
     let mut gw = LlmGateway::new();
     gw.register(FakeProvider::new("default-prov"));
     let req = LlmRequest::new("model-x", vec![]);
     let resp = gw.complete_default(&req).await.unwrap();
     assert_eq!(resp.content, "response from default-prov");
+}
+
+#[tokio::test]
+async fn test_gateway_complete_default_adds_metadata() {
+    let mut gw = LlmGateway::new();
+    gw.register(FakeProvider::new("default-prov"));
+    let req = LlmRequest::new("model-x", vec![Message::user("do not leak this")]);
+
+    let resp = gw.complete_default(&req).await.unwrap();
+    let metadata = resp.metadata.as_ref().unwrap();
+    assert_eq!(metadata.provider, "default-prov");
+    assert_eq!(metadata.requested_model, "model-x");
+    assert_eq!(metadata.effective_model, "model-x");
+    assert_eq!(metadata.served_model, "model-x");
+
+    let metadata_json = serde_json::to_string(metadata).unwrap();
+    assert!(metadata_json.contains("\"execution_mode\":\"non_streaming\""));
+    assert!(metadata_json.contains("\"cache_policy\":\"disabled\""));
+    assert!(!metadata_json.contains("do not leak this"));
 }
 
 #[tokio::test]
