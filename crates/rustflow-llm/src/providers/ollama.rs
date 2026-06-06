@@ -5,7 +5,7 @@ use tracing::{debug, instrument};
 
 use crate::error::{LlmError, Result};
 use crate::provider::{LlmProvider, ResponseStream};
-use crate::types::{LlmRequest, LlmResponse, Role};
+use crate::types::{LlmRequest, LlmResponse, LlmResponseMetadata, Role};
 
 const DEFAULT_BASE_URL: &str = "http://localhost:11434";
 
@@ -137,11 +137,19 @@ impl LlmProvider for OllamaProvider {
 
         let parsed: OllamaResponse = resp.json().await?;
 
+        let served_model = parsed.model;
+
         Ok(LlmResponse {
             content: parsed.message.content,
-            model: parsed.model,
+            model: served_model.clone(),
             usage: None,
             stop_reason: parsed.done_reason,
+            metadata: Some(LlmResponseMetadata::non_streaming(
+                "ollama",
+                &request.model,
+                &request.model,
+                &served_model,
+            )),
         })
     }
 

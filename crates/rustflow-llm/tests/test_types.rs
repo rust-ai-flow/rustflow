@@ -1,4 +1,6 @@
-use rustflow_llm::types::{LlmRequest, LlmResponse, Message, Role, TokenUsage};
+use rustflow_llm::types::{
+    LlmRequest, LlmResponse, LlmResponseMetadata, Message, Role, TokenUsage,
+};
 
 // ── Role ─────────────────────────────────────────────────────────────
 
@@ -119,6 +121,7 @@ fn test_response_serde_roundtrip() {
             output_tokens: 5,
         }),
         stop_reason: Some("end_turn".to_string()),
+        metadata: None,
     };
     let json = serde_json::to_string(&resp).unwrap();
     let deserialized: LlmResponse = serde_json::from_str(&json).unwrap();
@@ -133,10 +136,50 @@ fn test_response_optional_fields() {
         model: "gpt-4".to_string(),
         usage: None,
         stop_reason: None,
+        metadata: None,
     };
     let json = serde_json::to_value(&resp).unwrap();
     assert!(!json.as_object().unwrap().contains_key("usage"));
     assert!(!json.as_object().unwrap().contains_key("stop_reason"));
+    assert!(!json.as_object().unwrap().contains_key("metadata"));
+}
+
+#[test]
+fn test_response_deserializes_without_metadata() {
+    let json = r#"{
+        "content": "Hello!",
+        "model": "gpt-4",
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 5
+        }
+    }"#;
+
+    let deserialized: LlmResponse = serde_json::from_str(json).unwrap();
+    assert_eq!(deserialized.content, "Hello!");
+    assert!(deserialized.metadata.is_none());
+}
+
+#[test]
+fn test_response_metadata_serializes() {
+    let resp = LlmResponse {
+        content: "Hi".to_string(),
+        model: "gpt-4.1".to_string(),
+        usage: None,
+        stop_reason: None,
+        metadata: Some(LlmResponseMetadata::non_streaming(
+            "openai", "gpt-4", "gpt-4.1", "gpt-4.1",
+        )),
+    };
+
+    let json = serde_json::to_value(&resp).unwrap();
+    let metadata = &json["metadata"];
+    assert_eq!(metadata["provider"], "openai");
+    assert_eq!(metadata["requested_model"], "gpt-4");
+    assert_eq!(metadata["effective_model"], "gpt-4.1");
+    assert_eq!(metadata["served_model"], "gpt-4.1");
+    assert_eq!(metadata["execution_mode"], "non_streaming");
+    assert_eq!(metadata["cache_policy"], "disabled");
 }
 
 // ── TokenUsage ───────────────────────────────────────────────────────

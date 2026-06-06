@@ -111,6 +111,50 @@ pub struct LlmResponse {
     /// The stop reason (e.g. "end_turn", "max_tokens").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
+    /// Provider execution metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<LlmResponseMetadata>,
+}
+
+/// Execution metadata for a complete LLM response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmResponseMetadata {
+    pub provider: String,
+    pub requested_model: String,
+    pub effective_model: String,
+    pub served_model: String,
+    pub execution_mode: LlmExecutionMode,
+    pub cache_policy: LlmCachePolicy,
+}
+
+impl LlmResponseMetadata {
+    pub fn non_streaming(
+        provider: impl Into<String>,
+        requested_model: impl Into<String>,
+        effective_model: impl Into<String>,
+        served_model: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider: provider.into(),
+            requested_model: requested_model.into(),
+            effective_model: effective_model.into(),
+            served_model: served_model.into(),
+            execution_mode: LlmExecutionMode::NonStreaming,
+            cache_policy: LlmCachePolicy::Disabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmExecutionMode {
+    NonStreaming,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LlmCachePolicy {
+    Disabled,
 }
 
 /// Token usage reported by the provider.
@@ -243,6 +287,7 @@ mod tests {
                 output_tokens: 5,
             }),
             stop_reason: Some("end_turn".to_string()),
+            metadata: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let deserialized: LlmResponse = serde_json::from_str(&json).unwrap();
@@ -257,10 +302,36 @@ mod tests {
             model: "gpt-4".to_string(),
             usage: None,
             stop_reason: None,
+            metadata: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert!(!json.as_object().unwrap().contains_key("usage"));
         assert!(!json.as_object().unwrap().contains_key("stop_reason"));
+        assert!(!json.as_object().unwrap().contains_key("metadata"));
+    }
+
+    #[test]
+    fn test_response_deserializes_without_metadata() {
+        let json = r#"{
+            "content": "Hello!",
+            "model": "gpt-4",
+            "stop_reason": "end_turn"
+        }"#;
+        let deserialized: LlmResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(deserialized.content, "Hello!");
+        assert!(deserialized.metadata.is_none());
+    }
+
+    #[test]
+    fn test_response_metadata_serde() {
+        let metadata = LlmResponseMetadata::non_streaming("openai", "gpt-4", "gpt-4.1", "gpt-4.1");
+        let json = serde_json::to_value(&metadata).unwrap();
+        assert_eq!(json["provider"], "openai");
+        assert_eq!(json["requested_model"], "gpt-4");
+        assert_eq!(json["effective_model"], "gpt-4.1");
+        assert_eq!(json["served_model"], "gpt-4.1");
+        assert_eq!(json["execution_mode"], "non_streaming");
+        assert_eq!(json["cache_policy"], "disabled");
     }
 
     // ── TokenUsage ───────────────────────────────────────────────────────

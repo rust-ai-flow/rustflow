@@ -5,7 +5,7 @@ use tracing::{debug, instrument};
 
 use crate::error::{LlmError, Result};
 use crate::provider::{LlmProvider, ResponseStream};
-use crate::types::{LlmRequest, LlmResponse, Role, TokenUsage};
+use crate::types::{LlmRequest, LlmResponse, LlmResponseMetadata, Role, TokenUsage};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -148,14 +148,22 @@ impl LlmProvider for AnthropicProvider {
             .collect::<Vec<_>>()
             .join("");
 
+        let served_model = parsed.model;
+
         Ok(LlmResponse {
             content,
-            model: parsed.model,
+            model: served_model.clone(),
             usage: Some(TokenUsage {
                 input_tokens: parsed.usage.input_tokens,
                 output_tokens: parsed.usage.output_tokens,
             }),
             stop_reason: parsed.stop_reason,
+            metadata: Some(LlmResponseMetadata::non_streaming(
+                "anthropic",
+                &request.model,
+                &request.model,
+                &served_model,
+            )),
         })
     }
 
