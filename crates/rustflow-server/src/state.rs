@@ -554,10 +554,41 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ws::WsEvent;
+    use crate::ws::{WsEvent, WsEventEnvelope};
 
     fn temp_run_store_path() -> PathBuf {
         std::env::temp_dir().join(format!("rustflow-run-store-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn step_started(run_id: &str, seq: u64) -> WsEventEnvelope {
+        WsEventEnvelope::new(
+            run_id.to_string(),
+            seq,
+            WsEvent::StepStarted {
+                step_id: "a".to_string(),
+                step_name: "A".to_string(),
+            },
+        )
+    }
+
+    fn persisted_run(
+        agent_id: &str,
+        run_id: &str,
+        events: Vec<WsEventEnvelope>,
+    ) -> PersistedRunRecord {
+        PersistedRunRecord {
+            agent_id: agent_id.to_string(),
+            run_id: run_id.to_string(),
+            next_seq: events.len() as u64,
+            done: false,
+            events,
+        }
+    }
+
+    fn write_run_file(store_path: &Path, file_name: &str, snapshot: &PersistedRunRecord) {
+        fs::create_dir_all(store_path).unwrap();
+        let data = serde_json::to_vec(snapshot).unwrap();
+        fs::write(store_path.join(file_name), data).unwrap();
     }
 
     #[tokio::test]
@@ -818,6 +849,101 @@ mod tests {
         assert_eq!(replay.events.len(), 1);
         assert_eq!(replay.events[0].run_id, second_run_id);
         assert_eq!(replay.events[0].seq, 0);
+
+        let _ = fs::remove_dir_all(store_path);
+    }
+
+    #[tokio::test]
+    async fn test_recover_run_store_skips_malformed_json_without_panicking() {
+        let store_path = temp_run_store_path();
+        fs::create_dir_all(&store_path).unwrap();
+        fs::write(store_path.join("agent-bad.json"), b"{ not valid json").unwrap();
+
+        let recovered_state = AppState::with_run_store_path(store_path.clone());
+
+        assert!(recovered_state.observe_run("agent-1").await.is_none());
+        assert!(recovered_state.runs.read().await.is_empty());
+
+        let _ = fs::remove_dir_all(store_path);
+    }
+
+    #[tokio::test]
+    async fn test_recover_run_store_skips_empty_identifiers() {
+        for (agent_id, run_id) in [("", "run-1"), ("agent-1", "")] {
+            let store_path = temp_run_store_path();
+            let snapshot = persisted_run(agent_id, run_id, vec![step_started("run-1", 0)]);
+            write_run_file(&store_path, "agent-empty.json", &snapshot);
+
+            let recovered_state = AppState::with_run_store_path(store_path.clone());
+
+            assert!(recovered_state.runs.read().await.is_empty());
+            let _ = fs::remove_dir_all(store_path);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_recover_run_store_skips_mismatched_event_run_id() {
+        let store_path = temp_run_store_path();
+        let snapshot = persisted_run("agent-1", "run-1", vec![step_started("run-2", 0)]);
+        write_run_file(&store_path, "agent-mismatch.json", &snapshot);
+
+        let recovered_state = AppState::with_run_store_path(store_path.clone());
+
+        assert!(recovered_state.observe_run("agent-1").await.is_none());
+        assert!(recovered_state.runs.read().await.is_empty());
+
+        let _ = fs::remove_dir_all(store_path);
+    }
+
+    #[tokio::test]
+    async fn test_recover_run_store_skips_non_zero_or_jumped_sequence() {
+        for events in [
+            vec![step_started("run-1", 1)],
+            vec![step_started("run-1", 0), step_started("run-1", 2)],
+        ] {
+            let store_path = temp_run_store_path();
+            let snapshot = persisted_run("agent-1", "run-1", events);
+            write_run_file(&store_path, "agent-bad-seq.json", &snapshot);
+
+            let recovered_state = AppState::with_run_store_path(store_path.clone());
+
+            assert!(recovered_state.observe_run("agent-1").await.is_none());
+            assert!(recovered_state.runs.read().await.is_empty());
+            let _ = fs::remove_dir_all(store_path);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_recover_run_store_marks_unfinished_run_failed_and_repairs_snapshot() {
+        let store_path = temp_run_store_path();
+        let snapshot = persisted_run("agent-1", "run-1", vec![step_started("run-1", 0)]);
+        write_run_file(&store_path, "agent-unfinished.json", &snapshot);
+
+        let recovered_state = AppState::with_run_store_path(store_path.clone());
+        let recovered = recovered_state.observe_run("agent-1").await.unwrap();
+
+        assert!(recovered.done);
+        assert_eq!(recovered.run_id, "run-1");
+        assert_eq!(recovered.events.len(), 2);
+        assert_eq!(recovered.events[0].seq, 0);
+        assert_eq!(recovered.events[1].seq, 1);
+        assert!(matches!(
+            &recovered.events[1].event,
+            WsEvent::WorkflowFailed { error }
+                if error == "run interrupted before completion; active execution was not resumed"
+        ));
+
+        let repaired_path = RunStore::new(store_path.clone()).path_for_agent("agent-1");
+        let repaired: PersistedRunRecord =
+            serde_json::from_slice(&fs::read(repaired_path).unwrap()).unwrap();
+        assert!(repaired.done);
+        assert_eq!(repaired.next_seq, 2);
+        assert_eq!(repaired.events.len(), 2);
+        assert!(matches!(
+            &repaired.events[1].event,
+            WsEvent::WorkflowFailed { error }
+                if error == "run interrupted before completion; active execution was not resumed"
+        ));
 
         let _ = fs::remove_dir_all(store_path);
     }
